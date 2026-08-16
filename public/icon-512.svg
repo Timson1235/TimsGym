@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#115e59"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2dd4bf"/>
+      <stop offset="100%" stop-color="#a7f3d0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background rounded squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle inner border -->
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="4"/>
+
+  <!-- Center Dumbbell Icon with GymPulse Styling -->
+  <g filter="url(#shadow)" transform="translate(256, 256) scale(1.15)">
+    <!-- Central Bar -->
+    <rect x="-110" y="-12" width="220" height="24" rx="6" fill="url(#accentGrad)"/>
+    
+    <!-- Grip Knurling lines -->
+    <line x1="-30" y1="-10" x2="-30" y2="10" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/>
+    <line x1="0" y1="-10" x2="0" y2="10" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/>
+    <line x1="30" y1="-10" x2="30" y2="10" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/>
+
+    <!-- Left Weight Plates -->
+    <!-- Inner Plate -->
+    <rect x="-145" y="-70" width="24" height="140" rx="8" fill="#ffffff"/>
+    <!-- Outer Plate -->
+    <rect x="-175" y="-55" width="22" height="110" rx="6" fill="url(#accentGrad)"/>
+    <!-- Collar -->
+    <rect x="-120" y="-22" width="10" height="44" rx="3" fill="#ccfbf1"/>
+
+    <!-- Right Weight Plates -->
+    <!-- Inner Plate -->
+    <rect x="121" y="-70" width="24" height="140" rx="8" fill="#ffffff"/>
+    <!-- Outer Plate -->
+    <rect x="153" y="-55" width="22" height="110" rx="6" fill="url(#accentGrad)"/>
+    <!-- Collar -->
+    <rect x="110" y="-22" width="10" height="44" rx="3" fill="#ccfbf1"/>
+
+    <!-- AI Sparkle Icon Top Right -->
+    <g transform="translate(110, -110) scale(0.9)">
+      <path d="M0 -36 C0 -12 12 0 36 0 C12 0 0 12 0 36 C0 12 -12 0 -36 0 C-12 0 0 -12 0 -36 Z" fill="#fef08a"/>
+      <circle cx="0" cy="0" r="4" fill="#ffffff"/>
+    </g>
+    
+    <!-- Secondary spark top left -->
+    <g transform="translate(-115, 105) scale(0.55)">
+      <path d="M0 -30 C0 -10 10 0 30 0 C10 0 0 10 0 30 C0 10 -10 0 -30 0 C-10 0 0 -10 0 -30 Z" fill="#2dd4bf"/>
+    </g>
+  </g>
+</svg>

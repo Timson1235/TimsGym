@@ -1,0 +1,369 @@
+{
+  "profile": {
+    "name": "Tim",
+    "preferredUnit": "kg",
+    "experienceLevel": "Intermediate",
+    "primaryGoal": "Hypertrophy"
+  },
+  "exercises": [
+    {
+      "id": "ex_1",
+      "name": "Barbell Bench Press",
+      "category": "Chest",
+      "equipment": "Barbell",
+      "instructions": "Lie on bench, grip bar slightly wider than shoulder width. Lower bar smoothly to mid-chest and press up explosively.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 85,
+        "maxReps": 5,
+        "calculatedOneRepMax": 99,
+        "date": "2026-08-10"
+      }
+    },
+    {
+      "id": "ex_2",
+      "name": "Incline Dumbbell Press",
+      "category": "Chest",
+      "equipment": "Dumbbell",
+      "instructions": "Set bench to 30-45 degree incline. Press dumbbells up over upper chest while maintaining core tension.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 32,
+        "maxReps": 8,
+        "calculatedOneRepMax": 40,
+        "date": "2026-08-10"
+      }
+    },
+    {
+      "id": "ex_3",
+      "name": "Barbell Back Squat",
+      "category": "Legs",
+      "equipment": "Barbell",
+      "instructions": "Place bar across upper traps. Stand shoulder-width apart, brace core, sit hips down and back below parallel.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 100,
+        "maxReps": 5,
+        "calculatedOneRepMax": 116,
+        "date": "2026-08-08"
+      }
+    },
+    {
+      "id": "ex_4",
+      "name": "Romanian Deadlift",
+      "category": "Legs",
+      "equipment": "Barbell",
+      "instructions": "Hinge at hips with slight knee bend, push glutes back until hamstring stretch, then drive hips forward.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 85,
+        "maxReps": 8,
+        "calculatedOneRepMax": 105,
+        "date": "2026-08-08"
+      }
+    },
+    {
+      "id": "ex_5",
+      "name": "Lat Pulldown",
+      "category": "Back",
+      "equipment": "Cable",
+      "instructions": "Grip wide bar, pull down to upper chest while squeezing shoulder blades down and back.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 68,
+        "maxReps": 10,
+        "calculatedOneRepMax": 85,
+        "date": "2026-08-11"
+      }
+    },
+    {
+      "id": "ex_6",
+      "name": "Barbell Overhead Press",
+      "category": "Shoulders",
+      "equipment": "Barbell",
+      "instructions": "Stand tall, rack bar on collarbone, press straight up overhead while locking out shoulders and glutes.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 52,
+        "maxReps": 6,
+        "calculatedOneRepMax": 62,
+        "date": "2026-08-10"
+      }
+    },
+    {
+      "id": "ex_7",
+      "name": "Dumbbell Bicep Curl",
+      "category": "Arms",
+      "equipment": "Dumbbell",
+      "instructions": "Stand shoulder-width apart, curl weight up keeping elbows pinned to sides, squeeze peak contraction.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 16,
+        "maxReps": 10,
+        "calculatedOneRepMax": 20,
+        "date": "2026-08-11"
+      }
+    },
+    {
+      "id": "ex_8",
+      "name": "Tricep Rope Pushdown",
+      "category": "Arms",
+      "equipment": "Cable",
+      "instructions": "Keep elbows fixed by torso, extend arms down and pull rope ends apart at bottom for full tricep lock.",
+      "isCustom": false,
+      "personalRecord": {
+        "maxWeight": 28,
+        "maxReps": 12,
+        "calculatedOneRepMax": 36,
+        "date": "2026-08-10"
+      }
+    }
+  ],
+  "workouts": [
+    {
+      "id": "wk_101",
+      "title": "Push Day - Chest, Shoulders & Triceps",
+      "date": "2026-08-10",
+      "durationMinutes": 55,
+      "totalVolume": 3820,
+      "isCompleted": true,
+      "notes": "Felt strong on Bench Press! Increased top set by 2.5 kg.",
+      "exercises": [
+        {
+          "id": "we_1",
+          "exerciseId": "ex_1",
+          "exerciseName": "Barbell Bench Press",
+          "category": "Chest",
+          "sets": [
+            {
+              "id": "s1",
+              "setNumber": 1,
+              "type": "warmup",
+              "weight": 60,
+              "reps": 10,
+              "completed": true
+            },
+            {
+              "id": "s2",
+              "setNumber": 2,
+              "type": "working",
+              "weight": 80,
+              "reps": 8,
+              "rpe": 8,
+              "completed": true
+            },
+            {
+              "id": "s3",
+              "setNumber": 3,
+              "type": "working",
+              "weight": 85,
+              "reps": 5,
+              "rpe": 9,
+              "completed": true,
+              "notes": "New PR!"
+            },
+            {
+              "id": "s4",
+              "setNumber": 4,
+              "type": "working",
+              "weight": 85,
+              "reps": 5,
+              "rpe": 9.5,
+              "completed": true
+            }
+          ]
+        },
+        {
+          "id": "we_2",
+          "exerciseId": "ex_2",
+          "exerciseName": "Incline Dumbbell Press",
+          "category": "Chest",
+          "sets": [
+            {
+              "id": "s5",
+              "setNumber": 1,
+              "type": "working",
+              "weight": 30,
+              "reps": 10,
+              "rpe": 8,
+              "completed": true
+            },
+            {
+              "id": "s6",
+              "setNumber": 2,
+              "type": "working",
+              "weight": 32,
+              "reps": 8,
+              "rpe": 9,
+              "completed": true
+            }
+          ]
+        },
+        {
+          "id": "we_3",
+          "exerciseId": "ex_6",
+          "exerciseName": "Barbell Overhead Press",
+          "category": "Shoulders",
+          "sets": [
+            {
+              "id": "s7",
+              "setNumber": 1,
+              "type": "working",
+              "weight": 48,
+              "reps": 8,
+              "rpe": 8,
+              "completed": true
+            },
+            {
+              "id": "s8",
+              "setNumber": 2,
+              "type": "working",
+              "weight": 52,
+              "reps": 6,
+              "rpe": 9,
+              "completed": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wk_102",
+      "title": "Pull Day - Back & Biceps",
+      "date": "2026-08-11",
+      "durationMinutes": 48,
+      "totalVolume": 2620,
+      "isCompleted": true,
+      "notes": "Great lat pump. Focused on slow eccentrics.",
+      "exercises": [
+        {
+          "id": "we_4",
+          "exerciseId": "ex_5",
+          "exerciseName": "Lat Pulldown",
+          "category": "Back",
+          "sets": [
+            {
+              "id": "s9",
+              "setNumber": 1,
+              "type": "working",
+              "weight": 60,
+              "reps": 12,
+              "rpe": 7,
+              "completed": true
+            },
+            {
+              "id": "s10",
+              "setNumber": 2,
+              "type": "working",
+              "weight": 68,
+              "reps": 10,
+              "rpe": 8.5,
+              "completed": true
+            },
+            {
+              "id": "s11",
+              "setNumber": 3,
+              "type": "working",
+              "weight": 68,
+              "reps": 9,
+              "rpe": 9,
+              "completed": true
+            }
+          ]
+        },
+        {
+          "id": "we_5",
+          "exerciseId": "ex_7",
+          "exerciseName": "Dumbbell Bicep Curl",
+          "category": "Arms",
+          "sets": [
+            {
+              "id": "s12",
+              "setNumber": 1,
+              "type": "working",
+              "weight": 14,
+              "reps": 12,
+              "rpe": 8,
+              "completed": true
+            },
+            {
+              "id": "s13",
+              "setNumber": 2,
+              "type": "working",
+              "weight": 16,
+              "reps": 10,
+              "rpe": 9,
+              "completed": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "templates": [
+    {
+      "id": "tpl_1",
+      "name": "Push Day (Chest, Shoulders, Triceps)",
+      "description": "Classic heavy push session targeting chest, delts, and triceps.",
+      "category": "Push",
+      "exercises": [
+        {
+          "exerciseId": "ex_1",
+          "defaultSets": 4,
+          "defaultReps": 8
+        },
+        {
+          "exerciseId": "ex_2",
+          "defaultSets": 3,
+          "defaultReps": 10
+        },
+        {
+          "exerciseId": "ex_6",
+          "defaultSets": 3,
+          "defaultReps": 8
+        },
+        {
+          "exerciseId": "ex_8",
+          "defaultSets": 3,
+          "defaultReps": 12
+        }
+      ]
+    },
+    {
+      "id": "tpl_2",
+      "name": "Pull Day (Back & Biceps)",
+      "description": "Focus on vertical and horizontal pulls for back thickness and arms.",
+      "category": "Pull",
+      "exercises": [
+        {
+          "exerciseId": "ex_5",
+          "defaultSets": 4,
+          "defaultReps": 10
+        },
+        {
+          "exerciseId": "ex_7",
+          "defaultSets": 3,
+          "defaultReps": 12
+        }
+      ]
+    },
+    {
+      "id": "tpl_3",
+      "name": "Leg Day (Quads & Hamstrings)",
+      "description": "Heavy squatting and hamstring posterior chain work.",
+      "category": "Legs",
+      "exercises": [
+        {
+          "exerciseId": "ex_3",
+          "defaultSets": 4,
+          "defaultReps": 6
+        },
+        {
+          "exerciseId": "ex_4",
+          "defaultSets": 3,
+          "defaultReps": 8
+        }
+      ]
+    }
+  ]
+}

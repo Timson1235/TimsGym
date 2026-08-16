@@ -1,0 +1,6 @@
+{
+  "name": "TimsGym",
+  "description": "TimsGym - Personal gym workout logger and AI fitness coach powered by Gemini with multi-user Cloud SQL database storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
