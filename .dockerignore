@@ -1,0 +1,10 @@
+# Keep the build context small and never ship local/dev artifacts or secrets
+node_modules
+dist
+backend/.venv
+**/__pycache__
+.git
+.env
+.env.*
+!.env.example
+*.log

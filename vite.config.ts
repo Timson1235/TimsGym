@@ -17,6 +17,11 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Phase 0: forward /api/* to the FastAPI backend. Only used by the standalone
+      // `vite` dev server (npm run dev:web); the Express server.ts is unaffected.
+      proxy: {
+        '/api': 'http://localhost:8000',
+      },
     },
   };
 });

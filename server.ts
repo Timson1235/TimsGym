@@ -1,3 +1,4 @@
+import 'dotenv/config'; // MUST be first: loads .env before any module (e.g. db/index.ts) reads process.env
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -554,11 +555,12 @@ ${activeWorkoutContext}
 =============================`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: message,
         config: {
           systemInstruction,
           temperature: 0.2,
+          thinkingConfig: { thinkingBudget: 0 }, // disable slow "thinking" mode for snappy replies
           tools: [
             {
               functionDeclarations: [
@@ -918,11 +920,12 @@ Return JSON format with keys:
 "reasoning": string (1-2 sentences rationale based on progressive overload)`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: {
           responseMimeType: "application/json",
           temperature: 0.3,
+          thinkingConfig: { thinkingBudget: 0 },
         }
       });
 

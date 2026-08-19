@@ -31,7 +31,7 @@ export default defineConfig({
     user: user,
     password: password,
     database: sqlDbName,
-    ssl: false,
+    ssl: 'require',
   },
   verbose: true,
 });

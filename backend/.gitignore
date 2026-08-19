@@ -1,0 +1,5 @@
+# Python virtual environment — never commit
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
