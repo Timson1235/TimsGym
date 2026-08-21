@@ -2,14 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import { 
-  DatabaseState, WorkoutSession, RoutineTemplate, Exercise, UserProfile 
+  DatabaseState, WorkoutSession, Exercise, UserProfile
 } from './types';
 import { 
   fetchDatabase, saveWorkoutApi, deleteWorkoutApi, saveExerciseApi, updateProfileApi 
 } from './lib/api';
 import { Navbar } from './components/Navbar';
 import { AICoachMainView } from './components/AICoachMainView';
-import { Dashboard } from './components/Dashboard';
 import { ActiveWorkout } from './components/ActiveWorkout';
 import { WorkoutHistory } from './components/WorkoutHistory';
 import { ExerciseLibrary } from './components/ExerciseLibrary';
@@ -25,7 +24,7 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [guestMode, setGuestMode] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'ai-coach' | 'dashboard' | 'active-workout' | 'history' | 'exercises' | 'analytics'>('ai-coach');
+  const [activeTab, setActiveTab] = useState<'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics'>('ai-coach');
 
   // Active Workout Session state
   const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
@@ -92,48 +91,6 @@ export default function App() {
       date: new Date().toISOString().split('T')[0],
       durationMinutes: 0,
       exercises: [],
-      totalVolume: 0,
-      isCompleted: false,
-    };
-
-    setActiveWorkout(newSession);
-    setActiveTab('active-workout');
-  };
-
-  const handleStartTemplateWorkout = (tpl: RoutineTemplate) => {
-    const templateExercises = tpl.exercises.map((item, idx) => {
-      const exerciseObj = db.exercises.find((e) => e.id === item.exerciseId);
-      const defaultSets = [];
-      const numSets = item.defaultSets || 3;
-      const defaultWeight = exerciseObj?.personalRecord?.maxWeight || 60;
-
-      for (let i = 1; i <= numSets; i++) {
-        defaultSets.push({
-          id: `set_${Date.now()}_${idx}_${i}`,
-          setNumber: i,
-          type: 'working' as const,
-          weight: defaultWeight,
-          reps: item.defaultReps || 8,
-          rpe: 8,
-          completed: false,
-        });
-      }
-
-      return {
-        id: `we_${Date.now()}_${idx}`,
-        exerciseId: item.exerciseId,
-        exerciseName: exerciseObj ? exerciseObj.name : 'Custom Movement',
-        category: exerciseObj ? exerciseObj.category : 'Chest',
-        sets: defaultSets,
-      };
-    });
-
-    const newSession: WorkoutSession = {
-      id: `wk_${Date.now()}`,
-      title: tpl.name,
-      date: new Date().toISOString().split('T')[0],
-      durationMinutes: 0,
-      exercises: templateExercises,
       totalVolume: 0,
       isCompleted: false,
     };
@@ -226,18 +183,6 @@ export default function App() {
             }}
             onSelectTab={setActiveTab}
             initialPrompt={aiInitialPrompt}
-          />
-        )}
-
-        {activeTab === 'dashboard' && (
-          <Dashboard
-            db={db}
-            activeWorkout={activeWorkout}
-            onStartBlankWorkout={handleStartBlankWorkout}
-            onStartTemplateWorkout={handleStartTemplateWorkout}
-            onResumeWorkout={() => setActiveTab('active-workout')}
-            onSelectTab={(tab) => setActiveTab(tab)}
-            onQuickAskAI={handleQuickAskAI}
           />
         )}
 

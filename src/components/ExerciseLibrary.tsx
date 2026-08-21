@@ -31,11 +31,16 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
 
   const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Cardio'];
 
-  const filteredExercises = exercises.filter((ex) => {
-    const matchesCat = selectedCategory === 'All' || ex.category === selectedCategory;
-    const matchesQuery = ex.name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCat && matchesQuery;
-  });
+  const filteredExercises = exercises
+    .filter((ex) => {
+      const matchesCat = selectedCategory === 'All' || ex.category === selectedCategory;
+      const matchesQuery = ex.name.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesCat && matchesQuery;
+    })
+    .sort((a, b) => {
+      if (!!a.personalRecord === !!b.personalRecord) return 0;
+      return a.personalRecord ? -1 : 1;
+    });
 
   const handleCreateCustom = (e: React.FormEvent) => {
     e.preventDefault();

@@ -1,12 +1,12 @@
 import React from 'react';
-import { Dumbbell, History, LineChart, Sparkles, LayoutDashboard, Play, LogIn, LogOut, Database, User as UserIcon } from 'lucide-react';
+import { Dumbbell, History, LineChart, Sparkles, Play, LogIn, LogOut, Database, User as UserIcon } from 'lucide-react';
 import { WorkoutSession } from '../types';
 import { User, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 
 interface NavbarProps {
-  activeTab: 'ai-coach' | 'dashboard' | 'active-workout' | 'history' | 'exercises' | 'analytics';
-  setActiveTab: (tab: 'ai-coach' | 'dashboard' | 'active-workout' | 'history' | 'exercises' | 'analytics') => void;
+  activeTab: 'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics';
+  setActiveTab: (tab: 'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics') => void;
   activeWorkout: WorkoutSession | null;
   preferredUnit: 'lbs' | 'kg';
   onToggleUnit: () => void;
@@ -73,18 +73,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Sparkles className="h-3.5 w-3.5 text-teal-600 stroke-[2]" />
               AI Coach
-            </button>
-
-            <button
-              onClick={() => setActiveTab('dashboard')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all ${
-                activeTab === 'dashboard'
-                  ? 'bg-white text-slate-900 shadow-xs font-bold border border-slate-200/80'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-              }`}
-            >
-              <LayoutDashboard className="h-3.5 w-3.5 text-slate-500" />
-              Overview
             </button>
 
             <button
@@ -205,16 +193,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex flex-col items-center gap-1 p-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-colors ${
-              activeTab === 'dashboard' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <LayoutDashboard className="h-5 w-5" />
-            <span>Overview</span>
-          </button>
-
-          <button
             onClick={() => setActiveTab('active-workout')}
             className={`flex flex-col items-center gap-1 p-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-colors relative ${
               activeTab === 'active-workout' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-800'
@@ -248,6 +226,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Dumbbell className="h-5 w-5" />
             <span>PRs</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('analytics')}
+            className={`flex flex-col items-center gap-1 p-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-colors ${
+              activeTab === 'analytics' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <LineChart className="h-5 w-5" />
+            <span>Analytics</span>
           </button>
         </div>
       </div>
