@@ -72,6 +72,8 @@ RESPONSE STYLE: EXTREMELY MINIMALIST AND DIRECT.
 
 ACTIONS AVAILABLE: save_personal_memory, remove_personal_memory, log_workout, add_exercise, update_profile, delete_workout, start_workout_session.
 
+WORKOUT PROPOSAL: When the user wants to start or create a workout, call `start_workout_session` with well-chosen exercises that respect the user's constraints (e.g. no legs today). This does NOT start the workout — it creates a PROPOSAL the user confirms with a button in the UI. In your text reply, present it as a proposal (list the exercises) and invite the user to confirm or adjust — do NOT claim it has started.
+
 === USER DATABASE CONTEXT ===
 User Profile: Name: {profile['name']}, Goal: {profile['primaryGoal']}, Level: {profile['experienceLevel']}.
 
@@ -96,7 +98,7 @@ _FALLBACK_REPLIES = {
     "exercise_added": lambda d: f'✅ **Movement Added!**\n"{d["name"]}" ({d["category"]} • {d["equipment"]}) added to your library.',
     "profile_updated": lambda d: f'✅ **Profile Updated!**\nGoals set to **{d["primaryGoal"]}** ({d["experienceLevel"]} level).',
     "workout_deleted": lambda d: f'🗑️ **Workout Removed!**\nDeleted "{d["title"]}" ({d["date"]}) from history.',
-    "session_started": lambda d: f'🚀 **Session Prepared!**\nPre-loaded "{d["title"]}" with {len(d["exercises"])} exercises. Jump to Active Workout to start.',
+    "workout_proposed": lambda d: f'📋 **Vorschlag:** "{d["title"]}" mit {len(d["exercises"])} Übungen. Prüf die Übungen unten und klick **„Workout starten"** — oder sag mir, was ich ändern soll.',
 }
 
 
@@ -146,10 +148,12 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
         return {"reply": note, "actionExecuted": None, "db": db}
 
     action_executed = None
+    tools_used: list[str] = []  # debug: every tool the model invoked this turn
     for call in (response.function_calls or []):
         handler = HANDLERS.get(call.name)
         if not handler:
             continue
+        tools_used.append(call.name)
         args = dict(call.args or {})
         try:
             r = handler(session, user.id, db, args)
@@ -171,7 +175,7 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
     memory.write_message(session, user.id, thread_id, "assistant", reply_text)
 
     fresh_db = crud.get_user_database_state(session, user.id)
-    return {"reply": reply_text, "actionExecuted": action_executed, "db": fresh_db}
+    return {"reply": reply_text, "actionExecuted": action_executed, "toolsUsed": tools_used, "db": fresh_db}
 
 
 def suggest_weight(session: Session, user: User, exercise_name: str, target_reps: int = 8, target_rpe: int = 8) -> Optional[dict]:

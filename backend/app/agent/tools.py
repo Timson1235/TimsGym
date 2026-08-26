@@ -184,7 +184,9 @@ def handle_start_workout_session(session: Session, user_id: int, db: dict, args:
     new_session = {"id": _now_id("wk"), "title": args.get("title", "AI Initiated Session"),
                    "date": time.strftime("%Y-%m-%d"), "durationMinutes": 0, "totalVolume": 0,
                    "isCompleted": False, "exercises": session_exercises}
-    return {"type": "session_started", "data": new_session}
+    # PROPOSAL only — the frontend shows this with a confirm button; it does NOT
+    # auto-start. The workout begins when the user clicks "start".
+    return {"type": "workout_proposed", "data": new_session}
 
 
 HANDLERS = {

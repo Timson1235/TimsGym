@@ -53,6 +53,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [lastAction, setLastAction] = useState<any>(null);
   const [newMemoryInput, setNewMemoryInput] = useState<string>('');
   const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
+  const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
 
@@ -130,18 +131,20 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     if (!textToSend) setInputMessage('');
     setIsLoading(true);
+    setProposedWorkout(null); // clear any stale proposal when a new message is sent
 
     try {
       const response = await sendAIChatMessage(text, activeWorkout);
-      
+
       if (response.db) {
         onUpdateDatabase(response.db);
       }
 
       if (response.actionExecuted) {
         setLastAction(response.actionExecuted);
-        if (response.actionExecuted.type === 'session_started') {
-          onStartWorkoutSession(response.actionExecuted.data);
+        if (response.actionExecuted.type === 'workout_proposed') {
+          // Show a proposal card with a confirm button — do NOT auto-start.
+          setProposedWorkout(response.actionExecuted.data);
         }
       }
 
@@ -150,6 +153,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         role: 'assistant',
         content: response.reply || "Done.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        toolsUsed: response.toolsUsed,
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
@@ -304,6 +308,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     })}
                   </div>
 
+                  {msg.role === 'assistant' && msg.toolsUsed && msg.toolsUsed.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {msg.toolsUsed.map((t, i) => (
+                        <span key={i} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
+                          🔧 {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   <span className={`block text-[9px] font-mono mt-1 text-right ${msg.role === 'user' ? 'text-teal-100' : 'text-slate-400'}`}>
                     {msg.timestamp}
                   </span>
@@ -332,8 +346,41 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
             )}
           </div>
 
-          {/* Action Confirmation Banner */}
-          {lastAction && (
+          {/* Workout Proposal Card — user confirms before it actually starts */}
+          {proposedWorkout && (
+            <div className="mx-4 mb-1 mt-2 rounded-xl border border-teal-300 bg-teal-50/60 p-3 shadow-sm">
+              <div className="flex items-center gap-1.5 mb-2 text-teal-800">
+                <Dumbbell className="h-4 w-4" />
+                <span className="text-xs font-bold uppercase tracking-wider">Vorschlag: {proposedWorkout.title}</span>
+              </div>
+              <ul className="space-y-1 mb-3">
+                {proposedWorkout.exercises.map((ex, i) => (
+                  <li key={i} className="flex items-center justify-between text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-200">
+                    <span className="font-medium">{ex.exerciseName}</span>
+                    <span className="text-slate-500 font-mono">{ex.sets.length} × {ex.sets[0]?.reps ?? 10}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { onStartWorkoutSession(proposedWorkout); setProposedWorkout(null); }}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold uppercase tracking-wider transition-colors"
+                >
+                  <Play className="h-3.5 w-3.5" /> Workout starten
+                </button>
+                <button
+                  onClick={() => setProposedWorkout(null)}
+                  className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 text-xs font-semibold transition-colors"
+                >
+                  Verwerfen
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-2 text-center">Zum Ändern schreib einfach, was angepasst werden soll.</p>
+            </div>
+          )}
+
+          {/* Action Confirmation Banner (proposals use the card above instead) */}
+          {lastAction && lastAction.type !== 'workout_proposed' && (
             <div className="px-4 py-2 bg-teal-50 border-t border-b border-teal-200 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5 text-teal-800 font-medium">
                 <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" />

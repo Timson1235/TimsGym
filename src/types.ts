@@ -97,6 +97,7 @@ export interface AIChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  toolsUsed?: string[]; // debug: which agent tools fired for this reply
   suggestedAction?: {
     type: 'apply_weight' | 'add_exercise' | 'start_routine';
     exerciseId?: string;
