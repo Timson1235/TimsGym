@@ -65,30 +65,38 @@ def _build_system_instruction(db: dict, active_workout_state: Optional[dict]) ->
             lines.append(f"- {we['exerciseName']}: {sets_str}")
         active_ctx = f"Active Workout Session right now:\nTitle: {active_workout_state.get('title')}\nExercises in session:\n" + "\n".join(lines)
 
-    return f"""You are GymPulse AI, a concise fitness assistant with direct read/write access to Tim's database.
-RESPONSE STYLE: EXTREMELY MINIMALIST AND DIRECT.
-- ZERO greetings, NO parasocial fluff. Give facts, numbers, or action confirmations immediately. Max 1-3 short lines.
-- If the user shares a goal or constraint, call `save_personal_memory` to permanently remember it.
+    return f"""You are TimsGym AI — a knowledgeable, practical strength & hypertrophy coach for {profile['name']}. Reply in the user's language (usually German), like a sharp personal trainer: specific, grounded, honest. A brief natural acknowledgement is fine; skip corporate fluff and filler.
 
-ACTIONS AVAILABLE: save_personal_memory, remove_personal_memory, log_workout, add_exercise, update_profile, delete_workout, start_workout_session.
+HOW YOU COACH
+- When the user describes their situation or asks for a workout, PROPOSE one concrete session: a short warm-up, 4-6 main exercises with sets x reps and a load suggestion, brief form cues, and what to avoid + why (respect injuries/constraints). Then create it via the start_workout_session tool.
+- Base load suggestions on the PRs and recent workouts below; progress sensibly (≈RIR 2, small increases) and reference what they did last time when useful.
+- If a complaint sounds like a JOINT problem rather than muscle soreness, say so and suggest getting it checked — don't just train through it.
+- Be decisive: give ONE good plan, not a menu of options.
 
-WORKOUT PROPOSAL: When the user wants to start or create a workout, call `start_workout_session` with well-chosen exercises that respect the user's constraints (e.g. no legs today). This does NOT start the workout — it creates a PROPOSAL the user confirms with a button in the UI. In your text reply, present it as a proposal (list the exercises) and invite the user to confirm or adjust — do NOT claim it has started.
+TOOLS — actually call them, don't just talk about doing it
+- Propose/create a workout → call `start_workout_session` (a title + the exercise names). This shows the user a confirm-card; it does NOT auto-start. Put the full plan + reasoning in your TEXT reply.
+- Log a COMPLETED workout → `log_workout`.
+- `save_personal_memory` → ONLY for DURABLE facts: long-term goals, chronic/recurring injuries, available equipment, lasting preferences. NEVER for one-off or "today"/"this week" info (e.g. temporary soreness from a hike) — just use those in your reasoning, do NOT save them.
+- Also: add_exercise, update_profile, delete_workout, remove_personal_memory.
 
-=== USER DATABASE CONTEXT ===
-User Profile: Name: {profile['name']}, Goal: {profile['primaryGoal']}, Level: {profile['experienceLevel']}.
+STYLE
+- Never show internal IDs (wk_..., ex_...) to the user — refer to workouts by title and date.
+- Lay a workout out clearly: warm-up, main lifts A/B/C…, optional finisher — readable, with concrete numbers.
 
---- PERSONAL USER MEMORIES & PERMANENT GOALS ---
+=== USER DATA (use it; don't dump it back verbatim) ===
+Profile: {profile['name']} · Goal: {profile['primaryGoal']} · Level: {profile['experienceLevel']}
+
+Durable memories:
 {memories_list}
 
---- EXERCISE LIBRARY & PRs ---
+Exercise library & PRs:
 {exercise_records}
 
---- RECENT WORKOUTS ---
+Recent workouts (most recent first):
 {recent_workouts}
 
---- CURRENT ACTIVE SESSION ---
-{active_ctx}
-============================="""
+Active session:
+{active_ctx}"""
 
 
 _FALLBACK_REPLIES = {
@@ -130,45 +138,67 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
 
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=0.2,
+        temperature=0.3,
         thinking_config=types.ThinkingConfig(thinking_budget=0),
         tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
     )
 
-    # 4. One Gemini call (quota-friendly). Summary text is already injected into
-    #    the context, so no model-driven expand round-trip is needed.
-    try:
-        response = _client.models.generate_content(model="gemini-2.5-flash", contents=contents, config=config)
-    except Exception as e:
-        msg = str(e)
-        print(f"[coach] generate_content failed: {msg[:200]}")
-        note = ("⚠️ The AI is rate-limited right now (Gemini free-tier quota). Please try again in a minute."
-                if ("RESOURCE_EXHAUSTED" in msg or "429" in msg)
-                else "⚠️ The AI Coach hit an error. Please try again.")
-        return {"reply": note, "actionExecuted": None, "db": db}
-
+    # 4. Multi-step agent loop: the model may call tools, see the results, and keep
+    #    reasoning until it returns a final text answer (bounded to avoid runaway).
     action_executed = None
-    tools_used: list[str] = []  # debug: every tool the model invoked this turn
-    for call in (response.function_calls or []):
-        handler = HANDLERS.get(call.name)
-        if not handler:
-            continue
-        tools_used.append(call.name)
-        args = dict(call.args or {})
+    tools_used: list[str] = []  # debug: every tool invoked this turn
+    reply_text = ""
+    MAX_STEPS = 4
+    for _ in range(MAX_STEPS):
         try:
-            r = handler(session, user.id, db, args)
-            memory.write_tool_log(session, user.id, thread_id, call.name, args, str(r), "success")
-            if r:
-                action_executed = r
+            response = _client.models.generate_content(model="gemini-2.5-flash", contents=contents, config=config)
         except Exception as e:
-            memory.write_tool_log(session, user.id, thread_id, call.name, args, None, "failed", str(e))
+            msg = str(e)
+            print(f"[coach] generate_content failed: {msg[:200]}")
+            note = ("⚠️ Die KI ist gerade rate-limited (Gemini Free-Tier). Versuch's in einer Minute nochmal."
+                    if ("RESOURCE_EXHAUSTED" in msg or "429" in msg)
+                    else "⚠️ Der AI-Coach hatte einen Fehler. Versuch's nochmal.")
+            return {"reply": note, "actionExecuted": None, "toolsUsed": tools_used, "db": db}
 
-    reply_text = (response.text or "").strip()
+        calls = response.function_calls or []
+        if not calls:
+            reply_text = (response.text or "").strip()
+            break
+
+        # Record the model's tool-call turn, then execute each call and feed results back.
+        if response.candidates:
+            contents.append(response.candidates[0].content)
+        for call in calls:
+            args = dict(call.args or {})
+            handler = HANDLERS.get(call.name)
+            if not handler:
+                feedback = "unknown tool"
+            else:
+                tools_used.append(call.name)
+                try:
+                    r = handler(session, user.id, db, args)
+                    memory.write_tool_log(session, user.id, thread_id, call.name, args, str(r), "success")
+                    if r:
+                        action_executed = r
+                    if call.name == "start_workout_session":
+                        feedback = ("Workout proposal created and shown to the user with a confirm button. "
+                                    "Do NOT call start_workout_session again this turn. Now explain the plan "
+                                    "and the reasoning in your text reply.")
+                    else:
+                        feedback = "done"
+                except Exception as e:
+                    memory.write_tool_log(session, user.id, thread_id, call.name, args, None, "failed", str(e))
+                    feedback = f"error: {e}"
+            contents.append(types.Content(
+                role="tool",
+                parts=[types.Part.from_function_response(name=call.name, response={"result": feedback})],
+            ))
+
     if not reply_text:
         if action_executed and action_executed["type"] in _FALLBACK_REPLIES:
             reply_text = _FALLBACK_REPLIES[action_executed["type"]](action_executed["data"])
         else:
-            reply_text = "How else can I assist your workout today?"
+            reply_text = "Wie kann ich dir beim Training helfen?"
 
     # Persist this turn for multi-turn continuity.
     memory.write_message(session, user.id, thread_id, "user", message)

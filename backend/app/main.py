@@ -45,5 +45,7 @@ if DIST.is_dir():
             raise HTTPException(status_code=404, detail="Not found")
         candidate = DIST / full_path
         if full_path and candidate.is_file():
-            return FileResponse(candidate)          # favicon, manifest.json, sw.js, icons
-        return FileResponse(DIST / "index.html")     # SPA entry
+            return FileResponse(candidate)          # favicon, manifest.json, sw.js, icons (hashed assets are immutable)
+        # index.html must never be cached stale, or the browser keeps loading old
+        # JS bundles after a redeploy. Always revalidate it.
+        return FileResponse(DIST / "index.html", headers={"Cache-Control": "no-cache"})
