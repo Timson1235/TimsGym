@@ -98,6 +98,7 @@ export interface AIChatMessage {
   content: string;
   timestamp: string;
   toolsUsed?: string[]; // debug: which agent tools fired for this reply
+  usage?: AIUsage;
   suggestedAction?: {
     type: 'apply_weight' | 'add_exercise' | 'start_routine';
     exerciseId?: string;
@@ -106,6 +107,17 @@ export interface AIChatMessage {
     reps?: number;
     routineId?: string;
   };
+}
+
+export interface AIUsage {
+  provider: 'claude' | 'gemini';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
 }
 
 export interface AISuggestionResponse {

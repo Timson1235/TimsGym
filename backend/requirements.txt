@@ -7,6 +7,7 @@ sqlmodel>=0.0.22          # ORM (SQLAlchemy + Pydantic), talks to the same Neon 
 psycopg2-binary>=2.9      # Postgres driver
 google-auth>=2.30         # verify Firebase login tokens (public-cert check, no service-account file)
 pydantic-settings>=2.4    # typed config from .env
+certifi>=2024.7.4         # CA bundle for direct Anthropic HTTPS requests
 
 # Phase 2: AI agent
-google-genai>=1.0         # Gemini SDK (chat + function-calling)
+google-genai>=2.24.0      # Gemini 3.8 + thinking levels + function-call IDs

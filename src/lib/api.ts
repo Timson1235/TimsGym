@@ -1,4 +1,4 @@
-import { DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
+import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
 import { auth } from './firebase';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -141,12 +141,39 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
       headers,
       body: JSON.stringify({ message, activeWorkoutState }),
     });
-    if (!res.ok) throw new Error('AI Chat request failed');
-    return await res.json();
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('AI Chat request failed:', res.status, payload.error);
+      return {
+        reply: payload.reply || `Der AI-Coach ist momentan nicht erreichbar (HTTP ${res.status}).`,
+      };
+    }
+    return payload;
   } catch (error: any) {
     console.error('AI Chat Error:', error);
     return { reply: "Sorry, I couldn't reach the AI Coach right now. Please verify server connection." };
   }
+}
+
+export async function fetchAIChatHistory(): Promise<AIChatMessage[]> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/history', { headers });
+  if (!res.ok) throw new Error('Failed to fetch AI chat history');
+  const data = await res.json();
+  return (data.messages || []).map((message: any) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    timestamp: message.createdAt
+      ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '',
+  }));
+}
+
+export async function clearAIChatHistory(): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/history', { method: 'DELETE', headers });
+  if (!res.ok) throw new Error('Failed to clear AI chat history');
 }
 
 export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8) {

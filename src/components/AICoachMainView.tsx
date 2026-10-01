@@ -4,19 +4,30 @@ import {
   CheckCircle2, Play, ArrowRight, Zap, RefreshCw, History, LayoutDashboard,
   FileText, Trash2, Brain, Plus, X, BookmarkCheck, Target
 } from 'lucide-react';
-import { DatabaseState, WorkoutSession, AIChatMessage } from '../types';
-import { sendAIChatMessage, addPersonalMemoryApi, removePersonalMemoryApi } from '../lib/api';
+import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage } from '../types';
+import {
+  addPersonalMemoryApi,
+  clearAIChatHistory,
+  fetchAIChatHistory,
+  removePersonalMemoryApi,
+  sendAIChatMessage,
+} from '../lib/api';
+import { ChatMarkdown } from './ChatMarkdown';
+import {
+  AIUsageMeter,
+  EMPTY_AI_USAGE,
+  formatAIUsage,
+  mergeAIUsage,
+} from './AIUsageMeter';
 
 interface AICoachMainViewProps {
   db: DatabaseState;
   activeWorkout: WorkoutSession | null;
   onUpdateDatabase: (newDb: DatabaseState) => void;
   onStartWorkoutSession: (session: WorkoutSession) => void;
-  onSelectTab: (tab: 'ai-coach' | 'dashboard' | 'active-workout' | 'history' | 'exercises' | 'analytics') => void;
+  onSelectTab: (tab: 'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics') => void;
   initialPrompt?: string;
 }
-
-const CHAT_STORAGE_KEY = 'timsgym_ai_chat_history_v1';
 
 const DEFAULT_WELCOME_MSG: AIChatMessage = {
   id: 'welcome_msg',
@@ -24,6 +35,29 @@ const DEFAULT_WELCOME_MSG: AIChatMessage = {
   content: `TimsGym AI online. Frag mich nach Gewichten, Workouts oder neuen Übungen.`,
   timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 };
+
+function formatSetScheme(sets: WorkoutSet[]): string {
+  const groups: Array<{ count: number; set: WorkoutSet }> = [];
+  for (const set of sets) {
+    const previous = groups[groups.length - 1];
+    if (
+      previous
+      && previous.set.weight === set.weight
+      && previous.set.reps === set.reps
+      && previous.set.type === set.type
+    ) {
+      previous.count += 1;
+    } else {
+      groups.push({ count: 1, set });
+    }
+  }
+
+  return groups.map(({ count, set }) => {
+    const load = set.weight > 0 ? ` @ ${set.weight} kg` : ' Körpergewicht';
+    const type = set.type === 'warmup' ? ' (WU)' : '';
+    return `${count} × ${set.reps}${load}${type}`;
+  }).join(' + ');
+}
 
 export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   db,
@@ -33,20 +67,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   onSelectTab,
   initialPrompt = '',
 }) => {
-  const [messages, setMessages] = useState<AIChatMessage[]>(() => {
-    try {
-      const saved = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load saved chat history:', e);
-    }
-    return [DEFAULT_WELCOME_MSG];
-  });
+  const [messages, setMessages] = useState<AIChatMessage[]>([DEFAULT_WELCOME_MSG]);
 
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -54,6 +75,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [newMemoryInput, setNewMemoryInput] = useState<string>('');
   const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
   const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
+  const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
 
@@ -88,14 +110,19 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     }
   };
 
-  // Save chat messages to localStorage on update
   useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
-    } catch (e) {
-      console.error('Failed to save chat history:', e);
-    }
-  }, [messages]);
+    let cancelled = false;
+    fetchAIChatHistory()
+      .then((history) => {
+        if (!cancelled && history.length > 0) {
+          setMessages([DEFAULT_WELCOME_MSG, ...history]);
+        }
+      })
+      .catch((error) => console.error('Failed to load chat history:', error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Scroll only the chat container internally to prevent page jump on mobile
   const scrollToBottom = () => {
@@ -131,10 +158,13 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     if (!textToSend) setInputMessage('');
     setIsLoading(true);
-    setProposedWorkout(null); // clear any stale proposal when a new message is sent
 
     try {
       const response = await sendAIChatMessage(text, activeWorkout);
+
+      if (response.usage) {
+        setSessionUsage((current) => mergeAIUsage(current, response.usage));
+      }
 
       if (response.db) {
         onUpdateDatabase(response.db);
@@ -154,6 +184,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         content: response.reply || "Done.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         toolsUsed: response.toolsUsed,
+        usage: response.usage,
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
@@ -162,7 +193,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       const errorMsg: AIChatMessage = {
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
-        content: "⚠️ Connection error. Check GEMINI_API_KEY in settings.",
+        content: "Der AI-Coach ist gerade nicht erreichbar. Bitte prüfe die Serververbindung und versuche es erneut.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -179,11 +210,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       const summaryPrompt = "Summarise our conversation so far into 3-4 bullet points of key workouts, PRs logged, and actionable recommendations for my next session.";
       const response = await sendAIChatMessage(summaryPrompt, activeWorkout);
 
+      if (response.usage) {
+        setSessionUsage((current) => mergeAIUsage(current, response.usage));
+      }
+
       const summaryMsg: AIChatMessage = {
         id: `msg_summary_${Date.now()}`,
         role: 'assistant',
         content: `📋 **Conversation Summary**:\n\n${response.reply || 'Summary complete.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        usage: response.usage,
       };
 
       const freshMessages = [DEFAULT_WELCOME_MSG, summaryMsg];
@@ -195,13 +231,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     }
   };
 
-  const handleClearChat = () => {
-    const freshMessages = [DEFAULT_WELCOME_MSG];
-    setMessages(freshMessages);
+  const handleClearChat = async () => {
     try {
-      localStorage.removeItem(CHAT_STORAGE_KEY);
-    } catch (e) {
-      console.error('Failed to clear chat storage:', e);
+      await clearAIChatHistory();
+      setMessages([DEFAULT_WELCOME_MSG]);
+    } catch (error) {
+      console.error('Failed to clear chat history:', error);
     }
   };
 
@@ -243,6 +278,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                   GymPulse AI
                 </h3>
+                <AIUsageMeter usage={sessionUsage} />
               </div>
             </div>
 
@@ -294,19 +330,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                       : 'bg-white border border-slate-200 text-slate-800 shadow-xs rounded-tl-none'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap">
-                    {msg.content.split('\n').map((line, lIdx) => {
-                      if (line.startsWith('• ') || line.startsWith('- ')) {
-                        return (
-                          <div key={lIdx} className="flex items-start gap-1.5 my-0.5 text-slate-800">
-                            <span className="text-teal-600 font-bold">•</span>
-                            <span>{line.replace(/^[•-]\s*/, '')}</span>
-                          </div>
-                        );
-                      }
-                      return <p key={lIdx} className="mb-0.5">{line}</p>;
-                    })}
-                  </div>
+                  <ChatMarkdown
+                    content={msg.content}
+                    variant={msg.role === 'user' ? 'user' : 'light'}
+                  />
 
                   {msg.role === 'assistant' && msg.toolsUsed && msg.toolsUsed.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -315,6 +342,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                           🔧 {t}
                         </span>
                       ))}
+                    </div>
+                  )}
+
+                  {msg.role === 'assistant' && msg.usage && (
+                    <div className="mt-1 text-[9px] font-mono text-slate-400">
+                      {formatAIUsage(msg.usage)}
                     </div>
                   )}
 
@@ -355,9 +388,9 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
               </div>
               <ul className="space-y-1 mb-3">
                 {proposedWorkout.exercises.map((ex, i) => (
-                  <li key={i} className="flex items-center justify-between text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-200">
+                  <li key={i} className="flex items-start justify-between gap-3 text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-200">
                     <span className="font-medium">{ex.exerciseName}</span>
-                    <span className="text-slate-500 font-mono">{ex.sets.length} × {ex.sets[0]?.reps ?? 10}</span>
+                    <span className="text-right text-slate-500 font-mono leading-relaxed">{formatSetScheme(ex.sets)}</span>
                   </li>
                 ))}
               </ul>
@@ -574,7 +607,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <span>PR Ledger</span>
               </button>
               <button
-                onClick={() => onSelectTab('dashboard')}
+                onClick={() => onSelectTab('analytics')}
                 className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/50 text-xs font-medium text-slate-700 hover:text-slate-900 transition-colors flex items-center justify-center gap-1.5"
               >
                 <LayoutDashboard className="h-3.5 w-3.5 text-teal-600" />

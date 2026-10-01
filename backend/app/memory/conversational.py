@@ -5,7 +5,7 @@ Keyed by (user_id, thread_id). We use one thread per user by default
 """
 from typing import Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from ..models import Message, ToolLog
 from .flags import flags
@@ -29,6 +29,26 @@ def read_recent_messages(session: Session, user_id: int, thread_id: str, limit: 
         .limit(limit)
     ).all()
     return list(reversed(rows))
+
+
+def read_message_history(session: Session, user_id: int, thread_id: str, limit: int = 200) -> list[Message]:
+    """Recent persisted chat messages, including turns already summarized for the AI."""
+    if not flags.conversational:
+        return []
+    rows = session.exec(
+        select(Message)
+        .where(Message.user_id == user_id, Message.thread_id == thread_id)
+        .order_by(Message.id.desc())
+        .limit(limit)
+    ).all()
+    return list(reversed(rows))
+
+
+def clear_message_history(session: Session, user_id: int, thread_id: str) -> None:
+    session.exec(
+        delete(Message).where(Message.user_id == user_id, Message.thread_id == thread_id)
+    )
+    session.commit()
 
 
 def write_tool_log(

@@ -21,11 +21,26 @@ _client: Optional[genai.Client] = None
 if settings.GEMINI_API_KEY:
     _client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-_SUMMARY_PROMPT = """Summarize this fitness-coaching conversation into durable memory so it can be resumed later.
-Return JSON with keys:
-  "description": an 8-12 word specific label (mention concrete goals/lifts/decisions),
-  "summary": a concise summary capturing goals, workouts logged, PRs, injuries/constraints, and open action items.
-Do not invent information.
+_SUMMARY_PROMPT = """Summarize this fitness-coaching conversation into durable memory.
+The numeric training data is already in the database — do NOT restate
+sets, loads or reps. Capture only what the database cannot hold.
+
+Return JSON:
+  "description": 8-12 word specific label
+  "summary": covering, only where present in the conversation:
+     - constraints the user stated (injuries, conditions, equipment,
+       time availability)
+     - symptoms reported and whether they resolved
+     - preferences about exercises, order or style that the user stated
+       explicitly
+     - open questions the coach asked that the user has not answered
+     - corrections the user made to the coach
+
+Rules:
+  - Only what the USER stated. Not the coach's suggestions, reasoning or
+    prescriptions, even if the user did not object.
+  - No invented information. If a category is absent, omit it.
+  - Never summarize a single session's loads — those are in the database.
 
 Conversation:
 {transcript}"""

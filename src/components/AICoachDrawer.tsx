@@ -1,7 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Send, Bot, User, X, Loader2, Dumbbell, ArrowRight, Zap, RefreshCw, FileText, Trash2 } from 'lucide-react';
 import { AIChatMessage, WorkoutSession } from '../types';
-import { sendAIChatMessage } from '../lib/api';
+import { clearAIChatHistory, fetchAIChatHistory, sendAIChatMessage } from '../lib/api';
+import { ChatMarkdown } from './ChatMarkdown';
+import {
+  AIUsageMeter,
+  EMPTY_AI_USAGE,
+  formatAIUsage,
+  mergeAIUsage,
+} from './AIUsageMeter';
 
 interface AICoachDrawerProps {
   isOpen: boolean;
@@ -9,8 +16,6 @@ interface AICoachDrawerProps {
   activeWorkout: WorkoutSession | null;
   initialPrompt?: string;
 }
-
-const CHAT_STORAGE_KEY = 'timsgym_ai_chat_history_v1';
 
 const DEFAULT_DRAWER_WELCOME: AIChatMessage = {
   id: 'm1',
@@ -25,31 +30,27 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   activeWorkout,
   initialPrompt,
 }) => {
-  const [messages, setMessages] = useState<AIChatMessage[]>(() => {
-    try {
-      const saved = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to parse chat drawer history:', e);
-    }
-    return [DEFAULT_DRAWER_WELCOME];
-  });
+  const [messages, setMessages] = useState<AIChatMessage[]>([DEFAULT_DRAWER_WELCOME]);
 
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
 
   useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
-    } catch (e) {
-      console.error('Failed to save drawer chat history:', e);
-    }
-  }, [messages]);
+    let cancelled = false;
+    fetchAIChatHistory()
+      .then((history) => {
+        if (!cancelled && history.length > 0) {
+          setMessages([DEFAULT_DRAWER_WELCOME, ...history]);
+        }
+      })
+      .catch((error) => console.error('Failed to load drawer chat history:', error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Apply initial prompt if passed
   useEffect(() => {
@@ -81,11 +82,16 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
 
     try {
       const res = await sendAIChatMessage(userMsg.content, activeWorkout);
+      if (res.usage) {
+        setSessionUsage((current) => mergeAIUsage(current, res.usage));
+      }
       const aiMsg: AIChatMessage = {
         id: `ai_${Date.now()}`,
         role: 'assistant',
         content: res.reply || "I analyzed your workout history.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        toolsUsed: res.toolsUsed,
+        usage: res.usage,
       };
 
       setMessages((prev) => [...prev, aiMsg]);
@@ -101,11 +107,15 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     setIsLoading(true);
     try {
       const res = await sendAIChatMessage("Summarise our conversation into 3-4 bullet points of key takeaways and recommendations.", activeWorkout);
+      if (res.usage) {
+        setSessionUsage((current) => mergeAIUsage(current, res.usage));
+      }
       const summaryMsg: AIChatMessage = {
         id: `ai_summary_${Date.now()}`,
         role: 'assistant',
         content: `📋 **Conversation Summary**:\n\n${res.reply || 'Summary complete.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        usage: res.usage,
       };
       setMessages([DEFAULT_DRAWER_WELCOME, summaryMsg]);
     } catch (e) {
@@ -115,12 +125,12 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     }
   };
 
-  const handleClearChat = () => {
-    setMessages([DEFAULT_DRAWER_WELCOME]);
+  const handleClearChat = async () => {
     try {
-      localStorage.removeItem(CHAT_STORAGE_KEY);
-    } catch (e) {
-      console.error(e);
+      await clearAIChatHistory();
+      setMessages([DEFAULT_DRAWER_WELCOME]);
+    } catch (error) {
+      console.error('Failed to clear drawer chat history:', error);
     }
   };
 
@@ -148,10 +158,10 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
               <h3 className="font-black text-white text-sm uppercase tracking-wider flex items-center gap-2">
                 GymPulse AI Coach
                 <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-lime-400/10 text-lime-400 border border-lime-400/20">
-                  Gemini
+                  Claude
                 </span>
               </h3>
-              <p className="text-[10px] text-slate-400 font-mono">Realtime database intelligence</p>
+              <AIUsageMeter usage={sessionUsage} dark />
             </div>
           </div>
 
@@ -207,7 +217,15 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
                     : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
                 }`}
               >
-                <div className="whitespace-pre-wrap">{msg.content}</div>
+                <ChatMarkdown
+                  content={msg.content}
+                  variant={msg.role === 'user' ? 'user' : 'dark'}
+                />
+                {msg.role === 'assistant' && msg.usage && (
+                  <div className="mt-1 text-[9px] font-mono text-slate-500">
+                    {formatAIUsage(msg.usage)}
+                  </div>
+                )}
                 <div
                   className={`text-[9px] text-right font-mono ${
                     msg.role === 'user' ? 'text-slate-950/70' : 'text-slate-500'

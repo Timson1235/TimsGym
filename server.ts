@@ -3,7 +3,8 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
+import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { adminAuth } from './src/lib/firebase-admin.ts';
 import {
@@ -14,12 +15,182 @@ import {
   saveUserWorkout,
   deleteUserWorkout,
 } from './src/db/users.ts';
+import { createPool } from './src/db/index.ts';
 import { DatabaseState } from './src/types.ts';
 
 dotenv.config();
 
 const PORT = 3000;
 const DB_FILE_PATH = path.join(process.cwd(), 'gym_database.json');
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
+const GEMINI_LAST_RESORT_MODEL = process.env.GEMINI_LAST_RESORT_MODEL || 'gemini-2.5-flash';
+const WORKOUT_CONFIRMATION_QUESTION = 'Soll ich dieses Workout so starten?';
+
+function isTransientGeminiError(error: any) {
+  const status = Number(error?.status || error?.code || 0);
+  const message = String(error?.message || error || '').toUpperCase();
+  return status === 408
+    || status === 429
+    || status >= 500
+    || message.includes('UNAVAILABLE')
+    || message.includes('RESOURCE_EXHAUSTED')
+    || message.includes('INTERNAL')
+    || message.includes('FETCH FAILED')
+    || message.includes('TIMEOUT');
+}
+
+async function generateContentResilient(request: any) {
+  let lastError: any;
+  if (claude) {
+    try {
+      const allDeclarations = request.config?.tools?.[0]?.functionDeclarations || [];
+      const declarations = request.forceToolName
+        ? allDeclarations.filter((item: any) => item.name === request.forceToolName)
+        : allDeclarations;
+      const tools = declarations.map((declaration: any) => ({
+        name: declaration.name,
+        description: declaration.description,
+        input_schema: normalizeJsonSchema(declaration.parameters),
+        strict: true,
+      }));
+      const rawContents = Array.isArray(request.contents)
+        ? request.contents
+        : [{ role: 'user', parts: [{ text: String(request.contents || '') }] }];
+      const messages = request.claudeMessages || rawContents.map((content: any) => ({
+        role: content.role === 'model' ? 'assistant' : 'user',
+        content: (content.parts || []).map((part: any) => part.text || '').join('\n'),
+      }));
+      const response = await claude.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 4096,
+        system: `${request.config?.systemInstruction || ''}${request.forceToolName
+          ? `\n\nMANDATORY FOR THIS TURN: Call ${request.forceToolName}. Do not answer with text instead.`
+          : ''}`,
+        messages,
+        ...(tools.length > 0 ? { tools } : {}),
+        ...(request.forceToolName ? {
+          tool_choice: { type: 'auto', disable_parallel_tool_use: true },
+        } : {}),
+      } as any);
+      return {
+        text: response.content
+          .filter((block: any) => block.type === 'text')
+          .map((block: any) => block.text)
+          .join('\n'),
+        functionCalls: response.content
+          .filter((block: any) => block.type === 'tool_use')
+          .map((block: any) => ({ id: block.id, name: block.name, args: block.input })),
+        provider: 'claude',
+        rawContent: response.content,
+        claudeMessages: messages,
+        usage: {
+          provider: 'claude',
+          model: CLAUDE_MODEL,
+          inputTokens: response.usage.input_tokens || 0,
+          outputTokens: response.usage.output_tokens || 0,
+          cacheCreationTokens: response.usage.cache_creation_input_tokens || 0,
+          cacheReadTokens: response.usage.cache_read_input_tokens || 0,
+          estimatedCostUsd: (
+            (response.usage.input_tokens || 0) * 2
+            + (response.usage.output_tokens || 0) * 10
+            + (response.usage.cache_creation_input_tokens || 0) * 2.5
+            + (response.usage.cache_read_input_tokens || 0) * 0.2
+          ) / 1_000_000,
+        },
+      };
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`Claude ${CLAUDE_MODEL} failed; trying Gemini fallback: ${error.message}`);
+    }
+  }
+
+  if (!ai) throw lastError || new Error('No AI provider is configured');
+
+  const models = [...new Set([
+    GEMINI_MODEL,
+    GEMINI_FALLBACK_MODEL,
+    GEMINI_LAST_RESORT_MODEL,
+  ])];
+  for (const model of models) {
+    try {
+      const {
+        forceToolName: _forceToolName,
+        claudeMessages: _claudeMessages,
+        ...geminiRequest
+      } = request;
+      const response: any = await ai.models.generateContent({ ...geminiRequest, model });
+      response.provider = 'gemini';
+      response.usage = {
+        provider: 'gemini',
+        model,
+        inputTokens: response.usageMetadata?.promptTokenCount || 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: response.usageMetadata?.cachedContentTokenCount || 0,
+        estimatedCostUsd: 0,
+      };
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      if (!isTransientGeminiError(error)) throw error;
+      console.warn(`Gemini ${model} temporarily unavailable; trying next model.`);
+      await new Promise((resolve) => setTimeout(resolve, 350 + Math.random() * 250));
+    }
+  }
+  throw lastError;
+}
+
+function normalizeJsonSchema(value: any): any {
+  if (Array.isArray(value)) return value.map(normalizeJsonSchema);
+  if (!value || typeof value !== 'object') return value;
+
+  const typeMap: Record<string, string> = {
+    OBJECT: 'object',
+    ARRAY: 'array',
+    STRING: 'string',
+    NUMBER: 'number',
+    INTEGER: 'integer',
+    BOOLEAN: 'boolean',
+  };
+  const normalized = Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [
+      key,
+      key === 'type' && typeof nested === 'string'
+        ? (typeMap[nested.toUpperCase()] || nested.toLowerCase())
+        : normalizeJsonSchema(nested),
+    ]),
+  );
+  if (normalized.type === 'object' && normalized.additionalProperties === undefined) {
+    normalized.additionalProperties = false;
+  }
+  return normalized;
+}
+
+function isExplicitWorkoutConfirmation(message: string) {
+  const normalized = (message || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return [
+    /^(ja|yes|jep|jo)([,!. ]|$)/,
+    /\b(starte|start|lade|übernimm)\b.*\b(workout|training|plan)\b/,
+    /\b(workout|training|plan)\b.*\b(starten|laden|übernehmen)\b/,
+    /^(los geht'?s|leg los|auf geht'?s|los|start|starte|mach das|genau so|passt so)[!. ]*$/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function hasPendingWorkoutDraftText(content: string | undefined) {
+  const normalized = (content || '').toLowerCase();
+  if (normalized.includes(WORKOUT_CONFIRMATION_QUESTION.toLowerCase())) return true;
+
+  const looksLikePlan = /\b(workout|training|trainingsplan|plan)\b/.test(normalized);
+  const setPrescriptions = normalized.match(/\b\d+\s*[x×]\s*\d+\b/g) || [];
+  return looksLikePlan && setPrescriptions.length >= 2;
+}
+
+function claimsWorkoutStartedWithoutTool(reply: string, actionExecuted: any) {
+  if (actionExecuted?.type === 'workout_proposed') return false;
+  return /(workout|training).{0,30}(gestartet|erstellt|vorbereitet)|tool.{0,30}(genutzt|verwendet|erstellt)/i.test(reply);
+}
 
 async function getUserFromRequest(req: express.Request) {
   const authHeader = req.headers.authorization;
@@ -43,6 +214,8 @@ async function getUserFromRequest(req: express.Request) {
 
 // Initialize Gemini Client server-side
 const apiKey = process.env.GEMINI_API_KEY;
+const claudeApiKey = process.env.CLAUDE_API_KEY;
+const claude = claudeApiKey ? new Anthropic({ apiKey: claudeApiKey }) : null;
 let ai: GoogleGenAI | null = null;
 if (apiKey) {
   ai = new GoogleGenAI({
@@ -341,6 +514,12 @@ async function startServer() {
       }
     } catch (e) {
       console.error('Cloud SQL read error:', e);
+      if (req.headers.authorization) {
+        return res.status(500).json({ error: 'Failed to load authenticated cloud data' });
+      }
+    }
+    if (req.headers.authorization) {
+      return res.status(401).json({ error: 'Invalid authentication token' });
     }
     const db = readDatabase();
     res.json(db);
@@ -473,12 +652,50 @@ async function startServer() {
     res.json({ success: true, db: INITIAL_DB });
   });
 
+  app.get('/api/ai/history', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const result = await createPool().query(
+      `SELECT id, role, content, created_at
+       FROM messages
+       WHERE user_id = $1 AND thread_id = $2
+       ORDER BY id DESC
+       LIMIT 200`,
+      [sqlUser.id, String(sqlUser.id)],
+    );
+    res.json({
+      messages: result.rows.reverse().map((message) => ({
+        id: `server_${message.id}`,
+        role: message.role,
+        content: message.content,
+        createdAt: message.created_at,
+      })),
+    });
+  });
+
+  app.delete('/api/ai/history', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    await createPool().query(
+      'DELETE FROM messages WHERE user_id = $1 AND thread_id = $2',
+      [sqlUser.id, String(sqlUser.id)],
+    );
+    res.json({ success: true });
+  });
+
   // Gemini AI Assistant Endpoint with full database write/action capabilities
   app.post('/api/ai/chat', async (req, res) => {
     try {
       const { message, activeWorkoutState } = req.body;
       let db = readDatabase();
       const sqlUser = await getUserFromRequest(req);
+      let chatHistory: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
       if (sqlUser) {
         try {
           const cloudDb = await getUserDatabaseState(sqlUser.id);
@@ -486,14 +703,31 @@ async function startServer() {
             cloudDb.exercises = INITIAL_DB.exercises;
           }
           db = cloudDb;
+          const historyResult = await createPool().query(
+            `SELECT role, content FROM messages
+             WHERE user_id = $1 AND thread_id = $2
+             ORDER BY id DESC LIMIT 20`,
+            [sqlUser.id, String(sqlUser.id)],
+          );
+          chatHistory = historyResult.rows.reverse().map((entry) => ({
+            role: entry.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: entry.content }],
+          }));
         } catch (e) {
           console.error('Error fetching cloud db for AI chat:', e);
         }
       }
 
-      if (!ai) {
+      const hasPendingDraft = [...chatHistory]
+        .reverse()
+        .filter((entry) => entry.role === 'model')
+        .slice(0, 4)
+        .some((entry) => hasPendingWorkoutDraftText(entry.parts[0]?.text));
+      const canStartWorkout = isExplicitWorkoutConfirmation(message) && hasPendingDraft;
+
+      if (!ai && !claude) {
         return res.json({
-          reply: "I am ready to assist, but GEMINI_API_KEY environment variable is not configured. Please set the key in Settings -> Secrets."
+          reply: "Der AI-Coach ist nicht konfiguriert. Bitte setze CLAUDE_API_KEY oder GEMINI_API_KEY in den Server-Secrets."
         });
       }
 
@@ -527,9 +761,10 @@ async function startServer() {
       }
 
       const systemInstruction = `You are GymPulse AI, a concise fitness assistant with direct read/write access to Tim's database.
-RESPONSE STYLE: EXTREMELY MINIMALIST AND DIRECT. 
+RESPONSE STYLE: DIRECT AND PRECISE.
 - ZERO greetings, NO parasocial fluff, NO "Hey Tim!", NO "What are we tackling today?".
-- Give facts, numbers, or action confirmations immediately. Max 1-3 short lines or concise bullet points.
+- Outside workout drafts, answer in 1-3 short lines or concise bullet points.
+- Workout drafts must be complete enough to verify every exercise, set, rep and load.
 - If the user shares a goal (e.g. "Ich will Muskeln aufbauen", "Gewicht verlieren", "Sprungkraft verbessern", "Habe Schulterschmerzen"), call \`save_personal_memory\` to permanently remember it!
 
 ACTIONS AVAILABLE:
@@ -539,7 +774,19 @@ ACTIONS AVAILABLE:
 - To add an exercise: call \`add_exercise\`
 - To update profile: call \`update_profile\`
 - To delete a workout: call \`delete_workout\`
-- To start a session: call \`start_workout_session\`
+- \`start_workout_session\` is available only after explicit confirmation.
+- If one user message requests multiple actions, execute every required tool in the same turn.
+  Example: deleting an empty workout and logging the completed replacement requires both
+  \`delete_workout\` and \`log_workout\`; never stop after only the first action.
+- When the user says "wie geplant", reconstruct the latest agreed plan from conversation
+  history, apply all later corrections, and use those exact values for \`log_workout\`.
+
+WORKOUT CREATION IS ALWAYS TWO PHASES:
+1. DRAFT/REVISION: Write the full workout in text with every set, rep and load.
+   Never claim it is started. End the complete draft with exactly:
+   "${WORKOUT_CONFIRMATION_QUESTION}"
+2. CONFIRMATION: Only after the user explicitly confirms the latest draft,
+   call \`start_workout_session\` once and copy every agreed set exactly.
 
 === USER DATABASE CONTEXT ===
 ${profileInfo}
@@ -554,13 +801,13 @@ ${recentWorkouts}
 ${activeWorkoutContext}
 =============================`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: message,
+      const aiRequest = {
+        contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
         config: {
           systemInstruction,
-          temperature: 0.2,
-          thinkingConfig: { thinkingBudget: 0 }, // disable slow "thinking" mode for snappy replies
+          thinkingConfig: {
+            thinkingLevel: activeWorkoutState ? ThinkingLevel.LOW : ThinkingLevel.MEDIUM,
+          },
           tools: [
             {
               functionDeclarations: [
@@ -588,7 +835,7 @@ ${activeWorkoutContext}
                 },
                 {
                   name: 'log_workout',
-                  description: 'Log a new completed workout session directly into the user history log.',
+                  description: 'Log a completed workout only when the user says it was performed. Preserve the exact agreed date, exercises, ordered sets, weights, reps, set types, and RPE; do not invent missing values.',
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
@@ -652,7 +899,7 @@ ${activeWorkoutContext}
                 },
                 {
                   name: 'delete_workout',
-                  description: 'Delete a workout session from history by workout ID or title.',
+                  description: 'Delete one workout session from history by its exact ID or a sufficiently specific title. Use this as well as any other tool required by the same user request.',
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
@@ -661,34 +908,68 @@ ${activeWorkoutContext}
                     required: ['searchOrId']
                   }
                 },
-                {
+                ...(canStartWorkout ? [{
                   name: 'start_workout_session',
-                  description: 'Start or pre-load an active workout session.',
+                  description: 'Create the confirmation card for the latest workout explicitly approved by the user.',
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       title: { type: Type.STRING, description: 'Workout session title' },
-                      exerciseNames: {
+                      sessionNotes: { type: Type.STRING, description: 'Warm-up, cooldown, and session-wide guidance' },
+                      exercises: {
                         type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                        description: 'List of exercise names to pre-load'
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            exerciseName: { type: Type.STRING },
+                            notes: { type: Type.STRING },
+                            sets: {
+                              type: Type.ARRAY,
+                              items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                  weight: { type: Type.NUMBER },
+                                  reps: { type: Type.INTEGER },
+                                  setType: { type: Type.STRING, enum: ['warmup', 'working', 'drop', 'failure'] },
+                                  rir: { type: Type.NUMBER },
+                                  notes: { type: Type.STRING }
+                                },
+                                required: ['weight', 'reps', 'setType']
+                              }
+                            }
+                          },
+                          required: ['exerciseName', 'sets']
+                        },
+                        description: 'Exercises with every agreed set explicitly expanded'
                       }
                     },
-                    required: ['title', 'exerciseNames']
+                    required: ['title', 'exercises']
                   }
-                }
+                }] : [])
               ]
             }
           ]
         },
-      });
+      };
 
       let actionExecuted: any = null;
+      const actionsExecuted: any[] = [];
+      const toolsUsed: string[] = [];
+      const usage = {
+        provider: '',
+        model: '',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 0,
+        estimatedCostUsd: 0,
+      };
 
-      // Handle function calls if triggered by Gemini
-      if (response.functionCalls && response.functionCalls.length > 0) {
-        for (const call of response.functionCalls) {
-          const args: any = call.args || {};
+      const executeToolCall = async (call: any) => {
+        const args: any = call.args || {};
+        const actionCountBefore = actionsExecuted.length;
+        toolsUsed.push(call.name);
 
           if (call.name === 'save_personal_memory') {
             if (!Array.isArray(db.profile.personalMemories)) {
@@ -703,6 +984,7 @@ ${activeWorkoutContext}
               writeDatabase(db);
             }
             actionExecuted = { type: 'memory_saved', data: args.memory };
+            actionsExecuted.push(actionExecuted);
 
           } else if (call.name === 'remove_personal_memory') {
             if (Array.isArray(db.profile.personalMemories)) {
@@ -715,6 +997,7 @@ ${activeWorkoutContext}
               writeDatabase(db);
             }
             actionExecuted = { type: 'memory_removed', data: args.memoryTextOrIndex };
+            actionsExecuted.push(actionExecuted);
 
           } else if (call.name === 'log_workout') {
             const todayStr = new Date().toISOString().split('T')[0];
@@ -772,6 +1055,7 @@ ${activeWorkoutContext}
               writeDatabase(db);
             }
             actionExecuted = { type: 'workout_logged', data: newWorkout };
+            actionsExecuted.push(actionExecuted);
 
           } else if (call.name === 'add_exercise') {
             const newEx = {
@@ -788,6 +1072,7 @@ ${activeWorkoutContext}
             db.exercises.push(newEx);
             if (!sqlUser) writeDatabase(db);
             actionExecuted = { type: 'exercise_added', data: newEx };
+            actionsExecuted.push(actionExecuted);
 
           } else if (call.name === 'update_profile') {
             if (args.name) db.profile.name = args.name;
@@ -800,6 +1085,7 @@ ${activeWorkoutContext}
               writeDatabase(db);
             }
             actionExecuted = { type: 'profile_updated', data: db.profile };
+            actionsExecuted.push(actionExecuted);
 
           } else if (call.name === 'delete_workout') {
             const search = (args.searchOrId || '').toLowerCase();
@@ -811,22 +1097,29 @@ ${activeWorkoutContext}
               db.workouts = db.workouts.filter((w: any) => w.id !== target.id);
               if (!sqlUser) writeDatabase(db);
               actionExecuted = { type: 'workout_deleted', data: target };
+              actionsExecuted.push(actionExecuted);
             }
 
           } else if (call.name === 'start_workout_session') {
-            const sessionExercises = (args.exerciseNames || []).map((name: string, idx: number) => {
+            const sessionExercises = (args.exercises || []).map((planned: any, idx: number) => {
+              const name = planned.exerciseName;
               const matchingEx = db.exercises.find((e: any) => e.name.toLowerCase() === name.toLowerCase());
-              const defaultWeight = matchingEx?.personalRecord?.maxWeight || 60;
               return {
                 id: `we_${Date.now()}_${idx}`,
                 exerciseId: matchingEx ? matchingEx.id : `ex_temp_${idx}`,
                 exerciseName: matchingEx ? matchingEx.name : name,
-                category: matchingEx ? matchingEx.category : 'Chest',
-                sets: [
-                  { id: `s_${Date.now()}_${idx}_1`, setNumber: 1, type: 'working', weight: defaultWeight, reps: 10, rpe: 8, completed: false },
-                  { id: `s_${Date.now()}_${idx}_2`, setNumber: 2, type: 'working', weight: defaultWeight, reps: 10, rpe: 8, completed: false },
-                  { id: `s_${Date.now()}_${idx}_3`, setNumber: 3, type: 'working', weight: defaultWeight, reps: 10, rpe: 8, completed: false }
-                ]
+                category: matchingEx ? matchingEx.category : 'Other',
+                notes: planned.notes,
+                sets: (planned.sets || []).map((set: any, setIdx: number) => ({
+                  id: `s_${Date.now()}_${idx}_${setIdx}`,
+                  setNumber: setIdx + 1,
+                  type: set.setType,
+                  weight: set.weight,
+                  reps: set.reps,
+                  rpe: set.rir == null ? undefined : 10 - set.rir,
+                  notes: set.notes,
+                  completed: false
+                }))
               };
             });
 
@@ -837,16 +1130,72 @@ ${activeWorkoutContext}
               durationMinutes: 0,
               totalVolume: 0,
               isCompleted: false,
+              notes: args.sessionNotes,
               exercises: sessionExercises
             };
 
-            actionExecuted = { type: 'session_started', data: newActiveSession };
+            actionExecuted = { type: 'workout_proposed', data: newActiveSession };
+            actionsExecuted.push(actionExecuted);
           }
+        const currentAction = actionsExecuted.length > actionCountBefore
+          ? actionsExecuted[actionsExecuted.length - 1]
+          : null;
+        return JSON.stringify({
+          success: Boolean(currentAction),
+          tool: call.name,
+          action: currentAction?.type || null,
+          error: currentAction ? undefined : 'No matching record was changed.',
+        });
+      };
+
+      let response: any = null;
+      let replyText = '';
+      let claudeMessages: any[] | undefined;
+      for (let step = 0; step < 4; step += 1) {
+        response = await generateContentResilient({
+          ...aiRequest,
+          forceToolName: step === 0 && canStartWorkout ? 'start_workout_session' : undefined,
+          claudeMessages,
+        });
+        if (response.usage) {
+          usage.provider = response.usage.provider;
+          usage.model = response.usage.model;
+          usage.inputTokens += response.usage.inputTokens || 0;
+          usage.outputTokens += response.usage.outputTokens || 0;
+          usage.cacheCreationTokens += response.usage.cacheCreationTokens || 0;
+          usage.cacheReadTokens += response.usage.cacheReadTokens || 0;
+          usage.estimatedCostUsd += response.usage.estimatedCostUsd || 0;
         }
+
+        const calls = response.functionCalls || [];
+        if (calls.length === 0) {
+          replyText = response.text || '';
+          break;
+        }
+
+        const toolResults = [];
+        for (const call of calls) {
+          const feedback = await executeToolCall(call);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: call.id,
+            content: feedback,
+          });
+        }
+
+        if (actionExecuted?.type === 'workout_proposed' || response.provider !== 'claude') {
+          break;
+        }
+        claudeMessages = [
+          ...(response.claudeMessages || []),
+          { role: 'assistant', content: response.rawContent },
+          { role: 'user', content: toolResults },
+        ];
       }
+      usage.totalTokens = usage.inputTokens + usage.outputTokens
+        + usage.cacheCreationTokens + usage.cacheReadTokens;
 
       // Generate response text
-      let replyText = response.text;
       if (!replyText || replyText.trim() === '') {
         if (actionExecuted) {
           if (actionExecuted.type === 'memory_saved') {
@@ -861,18 +1210,49 @@ ${activeWorkoutContext}
             replyText = `✅ **Profile Updated!**\nYour profile goals have been set to **${actionExecuted.data.primaryGoal}** (${actionExecuted.data.experienceLevel} level).`;
           } else if (actionExecuted.type === 'workout_deleted') {
             replyText = `🗑️ **Workout Removed!**\nI've deleted **"${actionExecuted.data.title}"** (${actionExecuted.data.date}) from your workout log history.`;
-          } else if (actionExecuted.type === 'session_started') {
-            replyText = `🚀 **Workout Session Prepared!**\nI've pre-loaded **"${actionExecuted.data.title}"** with ${actionExecuted.data.exercises.length} exercises. Click **Resume / Jump to Active Workout** to start tracking set by set!`;
+          } else if (actionExecuted.type === 'workout_proposed') {
+            replyText = `Der exakt bestätigte Plan ist jetzt unten als Workout-Karte vorbereitet. Prüf ihn kurz und klick **Workout starten**.`;
           }
         } else {
           replyText = "I have analyzed your request against your database logs. How else can I assist your workout today?";
         }
       }
 
-      res.json({ reply: replyText, actionExecuted, db });
+      if (actionExecuted?.type === 'workout_proposed') {
+        replyText = "Der bestätigte Plan ist jetzt als Workout-Karte vorbereitet. Prüf ihn kurz und klick auf **Workout starten**.";
+      } else if (canStartWorkout) {
+        replyText = "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht gestartet; bitte versuche die Bestätigung erneut.";
+      } else if (claimsWorkoutStartedWithoutTool(replyText, actionExecuted)) {
+        replyText = canStartWorkout
+          ? "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht gestartet; bitte versuche die Bestätigung erneut."
+          : `Das Workout wurde noch nicht gestartet. Ich muss zuerst den vollständigen Plan bestätigen lassen: ${WORKOUT_CONFIRMATION_QUESTION}`;
+      }
+
+      if (sqlUser) {
+        await createPool().query(
+          `INSERT INTO messages (user_id, thread_id, role, content)
+           VALUES ($1, $2, 'user', $3), ($1, $2, 'assistant', $4)`,
+          [sqlUser.id, String(sqlUser.id), message, replyText],
+        );
+      }
+
+      res.json({
+        reply: replyText,
+        actionExecuted,
+        actionsExecuted,
+        toolsUsed,
+        usage,
+        db,
+      });
     } catch (error: any) {
       console.error("AI Chat Error:", error);
-      res.status(500).json({ error: error.message || "Failed to generate AI response" });
+      const temporary = isTransientGeminiError(error);
+      res.status(temporary ? 503 : 500).json({
+        error: error.message || "Failed to generate AI response",
+        reply: temporary
+          ? "Der AI-Coach ist gerade vorübergehend ausgelastet. Bitte sende die Nachricht in einem Moment erneut."
+          : "Der AI-Coach konnte die Anfrage nicht verarbeiten. Bitte prüfe die Serverkonfiguration.",
+      });
     }
   });
 
@@ -882,7 +1262,7 @@ ${activeWorkoutContext}
       const { exerciseName, targetReps, targetRpe } = req.body;
       const db = readDatabase();
 
-      if (!ai) {
+      if (!ai && !claude) {
         return res.json({
           recommendation: "API key not configured.",
           suggestedWeight: 0,
@@ -919,8 +1299,7 @@ Return JSON format with keys:
 "recommendation": string (short 1 sentence summary),
 "reasoning": string (1-2 sentences rationale based on progressive overload)`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const response = await generateContentResilient({
         contents: prompt,
         config: {
           responseMimeType: "application/json",

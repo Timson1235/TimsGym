@@ -1,6 +1,9 @@
 """Test the real user scenario: soreness + full body without legs.
 Expect: NO memory save (it's temporary), a workout PROPOSAL, and a coaching text."""
 import sys
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, ".")
 
 from sqlalchemy import text

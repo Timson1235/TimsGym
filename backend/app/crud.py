@@ -26,19 +26,37 @@ def _exercise_out(ex: Exercise) -> dict:
     return out
 
 
+import json
+
+
+def _parse_notes_and_flags(notes_str: Optional[str]) -> tuple[Optional[str], list[dict]]:
+    if not notes_str:
+        return None, []
+    try:
+        data = json.loads(notes_str)
+        if isinstance(data, dict) and "openFlags" in data:
+            return data.get("userNotes"), data.get("openFlags", [])
+    except Exception:
+        pass
+    return notes_str, []
+
+
 def _profile_out(p: Optional[Profile]) -> dict:
     if not p:
         return {
             "name": "Athlete", "preferredUnit": "kg", "experienceLevel": "Intermediate",
             "primaryGoal": "Hypertrophy", "personalMemories": [DEFAULT_MEMORIES[0]],
+            "openFlags": [], "notes": None,
         }
+    user_notes, open_flags = _parse_notes_and_flags(p.notes)
     return {
         "name": p.name,
         "preferredUnit": p.preferred_unit or "kg",
         "experienceLevel": p.experience_level or "Intermediate",
         "primaryGoal": p.primary_goal or "Hypertrophy",
         "personalMemories": p.personal_memories if isinstance(p.personal_memories, list) else [],
-        "notes": p.notes or None,
+        "openFlags": open_flags,
+        "notes": user_notes,
     }
 
 
@@ -138,11 +156,20 @@ def update_user_profile(session: Session, user_id: int, partial: dict) -> None:
         session.add(profile)
     mapping = {
         "name": "name", "preferredUnit": "preferred_unit", "experienceLevel": "experience_level",
-        "primaryGoal": "primary_goal", "personalMemories": "personal_memories", "notes": "notes",
+        "primaryGoal": "primary_goal", "personalMemories": "personal_memories",
     }
     for api_key, col in mapping.items():
         if api_key in partial and partial[api_key] is not None:
             setattr(profile, col, partial[api_key])
+
+    if "openFlags" in partial or "notes" in partial:
+        user_notes, open_flags = _parse_notes_and_flags(profile.notes)
+        if "openFlags" in partial:
+            open_flags = partial["openFlags"]
+        if "notes" in partial:
+            user_notes = partial["notes"]
+        profile.notes = json.dumps({"userNotes": user_notes, "openFlags": open_flags})
+
     session.add(profile)
     session.commit()
 
