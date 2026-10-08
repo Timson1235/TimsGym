@@ -3,9 +3,13 @@
 Phase 2a: stateless (only the latest message is sent, like the current Node
 app). Conversation memory + summarization arrive in Phase 2b.
 """
+import json
 import re
 import time
+import uuid
+from datetime import datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from google import genai
 from google.genai import types
@@ -332,9 +336,20 @@ accessories — say it in one sentence, then adapt anyway.
 - resolve_exercise        before logging an unclear exercise name
 - open_flag / resolve_flag   a symptom or limitation that changes
                           prescriptions but is not permanent
+- save_personal_memory    persist a fact when the user explicitly asks to
+                          remember, save, or add it to memory
+- remove_personal_memory  forget a saved fact on explicit request
 
-Do not call save_personal_memory. Durable facts are written after the
-session by a separate pass, not by you mid-conversation.
+EXERCISE IDENTITY:
+- Every workout and set must use a permanent exercise from the user's library.
+- If wording is colloquial, abbreviated, translated, or not copied exactly from
+  the library, call resolve_exercise first and use its canonical exerciseName.
+- If resolve_exercise returns not_found, call add_exercise once, then retry the
+  original logging/start tool. Never invent a temporary exercise identity.
+
+When the user explicitly asks to remember something, call
+save_personal_memory in that same turn and confirm only after the tool succeeds.
+Do not automatically store facts the user did not ask you to remember.
 
 ════ STYLE ════
 - Never show internal IDs.
@@ -360,22 +375,73 @@ _FALLBACK_REPLIES = {
 }
 
 
-def run_chat(session: Session, user: User, message: str, active_workout_state: Optional[dict]) -> dict:
+def run_chat(
+    session: Session,
+    user: User,
+    message: str,
+    active_workout_state: Optional[dict],
+    request_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+) -> dict:
+    request_started = time.perf_counter()
+    request_id = request_id or str(uuid.uuid4())
+    trace_steps: list[dict] = []
     db = crud.get_user_database_state(session, user.id)
     if _client is None and not settings.CLAUDE_API_KEY:
-        return {"reply": "AI is not configured (CLAUDE_API_KEY or GEMINI_API_KEY missing).", "actionExecuted": None, "db": db}
+        total_ms = round((time.perf_counter() - request_started) * 1000)
+        trace = {
+            "requestId": request_id,
+            "totalMs": total_ms,
+            "agentSteps": 0,
+            "modelMs": 0,
+            "toolMs": 0,
+            "contextMs": total_ms,
+            "persistenceMs": 0,
+            "slowestStep": None,
+            "steps": [],
+        }
+        return {
+            "reply": "AI is not configured (CLAUDE_API_KEY or GEMINI_API_KEY missing).",
+            "actionExecuted": None,
+            "toolsUsed": [],
+            "usage": None,
+            "trace": trace,
+            "db": db,
+        }
 
-    thread_id = str(user.id)
+    thread_id = thread_id or str(user.id)
+    history_compacted = False
+    summary_usage = None
 
     # 1. Auto-summarize: if recent history has grown past budget, compress older turns.
     history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
     if context.should_summarize("\n".join(m.content for m in history)):
-        summ.summarize_conversation(session, user.id, thread_id)
+        compacted = summ.summarize_conversation(session, user.id, thread_id)
+        history_compacted = bool(compacted)
+        summary_usage = compacted.get("usage") if compacted else None
         history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
 
     can_start_workout = (
         is_explicit_workout_confirmation(message)
         and has_pending_workout_draft(history)
+    )
+    normalized_message = message.strip().lower()
+    explicit_memory_save = bool(re.search(
+        r"\b(add|save|store|remember)\b.{0,35}\bmemory\b|"
+        r"\bmemory\b.{0,35}\b(add|save|store)\b|"
+        r"\b(merk|merke|speicher|speichere)\b.{0,20}\b(dir|erinnerung|gedächtnis)?\b",
+        normalized_message,
+    ))
+    explicit_memory_remove = bool(re.search(
+        r"\b(forget|remove|delete)\b.{0,35}\bmemory\b|"
+        r"\b(vergiss|lösche|entferne)\b.{0,25}\b(erinnerung|gedächtnis|memory)?\b",
+        normalized_message,
+    ))
+    required_tool_name = (
+        "start_workout_session" if can_start_workout
+        else "remove_personal_memory" if explicit_memory_remove
+        else "save_personal_memory" if explicit_memory_save
+        else None
     )
     available_tools = [
         declaration for declaration in TOOL_DECLARATIONS
@@ -384,6 +450,13 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
 
     # 2. System context + references to any compressed (summarized) history.
     system_instruction = _build_system_instruction(db, active_workout_state)
+    local_now = datetime.now(ZoneInfo("Europe/Berlin"))
+    system_instruction += (
+        "\n\n════ CURRENT TIME ════\n"
+        f"Current local date and time: {local_now.strftime('%A, %Y-%m-%d %H:%M')} "
+        "(Europe/Berlin). Resolve relative dates such as today, yesterday and tomorrow "
+        "from this value before calling tools."
+    )
     summary_ctx = summ.read_summary_context(session, user.id, thread_id)
     if summary_ctx:
         system_instruction += "\n\n" + summary_ctx
@@ -405,6 +478,11 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
         thinking_config=thinking_config,
         tools=[types.Tool(function_declarations=available_tools)],
     )
+    trace_steps.append({
+        "kind": "context",
+        "name": "Database and context",
+        "durationMs": round((time.perf_counter() - request_started) * 1000),
+    })
 
     # 4. Multi-step agent loop: the model may call tools, see the results, and keep
     #    reasoning until it returns a final text answer (bounded to avoid runaway).
@@ -415,6 +493,8 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
     MAX_STEPS = 4
     def execute_tool(name: str, args: dict, call_id: str = "") -> str:
         nonlocal action_executed
+        tool_started = time.perf_counter()
+        tool_status = "success"
         handler = HANDLERS.get(name)
         if not handler:
             return "unknown tool"
@@ -442,8 +522,16 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
                 return f"Suggested weight: {result.get('suggested_weight')}kg ({result.get('reasoning')})."
             return str(result) if result else "done"
         except Exception as error:
+            tool_status = "error"
             memory.write_tool_log(session, user.id, thread_id, name, args, None, "failed", str(error))
             return f"error: {error}"
+        finally:
+            trace_steps.append({
+                "kind": "tool",
+                "name": name,
+                "durationMs": round((time.perf_counter() - tool_started) * 1000),
+                "status": tool_status,
+            })
 
     claude_failed = False
     if settings.CLAUDE_API_KEY:
@@ -460,7 +548,8 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
                 messages=claude_messages,
                 tools=available_tools,
                 handle_tool=execute_tool,
-                force_tool_name="start_workout_session" if can_start_workout else None,
+                on_trace_step=trace_steps.append,
+                force_tool_name=required_tool_name,
                 max_steps=MAX_STEPS,
             )
             reply_text = claude_result["text"]
@@ -469,7 +558,8 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
             claude_failed = True
             print(f"[coach] Claude failed, trying Gemini fallback: {str(error)[:200]}")
 
-    for _ in range(MAX_STEPS if (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
+    for step_index in range(MAX_STEPS if (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
+        model_started = time.perf_counter()
         try:
             response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config)
             metadata = getattr(response, "usage_metadata", None)
@@ -487,6 +577,14 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
                     "estimatedCostUsd": 0,
                 }
         except Exception as e:
+            trace_steps.append({
+                "kind": "llm",
+                "name": f"Gemini round {step_index + 1}",
+                "durationMs": round((time.perf_counter() - model_started) * 1000),
+                "step": step_index + 1,
+                "provider": "gemini",
+                "status": "error",
+            })
             msg = str(e)
             print(f"[coach] generate_content failed: {msg[:200]}")
             if "503" in msg or "UNAVAILABLE" in msg:
@@ -495,7 +593,16 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
                 note = "⚠️ Die KI ist gerade rate-limited (Gemini Free-Tier). Versuch's in einer Minute nochmal."
             else:
                 note = "⚠️ Der AI-Coach hatte einen Fehler. Versuch's nochmal."
-            return {"reply": note, "actionExecuted": None, "toolsUsed": tools_used, "db": db}
+            reply_text = note
+            break
+
+        trace_steps.append({
+            "kind": "llm",
+            "name": f"Gemini round {step_index + 1}",
+            "durationMs": round((time.perf_counter() - model_started) * 1000),
+            "step": step_index + 1,
+            "provider": "gemini",
+        })
 
         calls = response.function_calls or []
         if not calls:
@@ -534,6 +641,8 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
             "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht "
             "gestartet; bitte versuche die Bestätigung erneut."
         )
+    elif required_tool_name and required_tool_name not in tools_used:
+        reply_text = "Ich konnte die gewünschte Änderung nicht im persönlichen Gedächtnis speichern. Bitte versuche es erneut."
     elif _claims_workout_started_without_tool(reply_text, action_executed):
         reply_text = (
             f"Das Workout wurde noch nicht gestartet. Ich muss zuerst den vollständigen Plan "
@@ -541,16 +650,71 @@ def run_chat(session: Session, user: User, message: str, active_workout_state: O
         )
 
     # Persist this turn for multi-turn continuity.
+    persistence_started = time.perf_counter()
     memory.write_message(session, user.id, thread_id, "user", message)
     memory.write_message(session, user.id, thread_id, "assistant", reply_text)
+    trace_steps.append({
+        "kind": "persistence",
+        "name": "Persist response",
+        "durationMs": round((time.perf_counter() - persistence_started) * 1000),
+    })
 
+    active_after_turn = memory.read_recent_messages(session, user.id, thread_id, limit=200)
+    if context.should_summarize("\n".join(m.content for m in active_after_turn)):
+        summary_started = time.perf_counter()
+        compacted = summ.summarize_conversation(session, user.id, thread_id)
+        history_compacted = history_compacted or bool(compacted)
+        if compacted:
+            extra_usage = compacted.get("usage") or {}
+            if usage is None:
+                usage = extra_usage
+            else:
+                for key in ("inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens", "totalTokens"):
+                    usage[key] = usage.get(key, 0) + extra_usage.get(key, 0)
+                usage["estimatedCostUsd"] = usage.get("estimatedCostUsd", 0) + extra_usage.get("estimatedCostUsd", 0)
+        trace_steps.append({
+            "kind": "llm",
+            "name": "Conversation summary",
+            "durationMs": round((time.perf_counter() - summary_started) * 1000),
+            "provider": "claude" if settings.CLAUDE_API_KEY else "gemini",
+        })
+    if summary_usage:
+        if usage is None:
+            usage = summary_usage
+        else:
+            for key in ("inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens", "totalTokens"):
+                usage[key] = usage.get(key, 0) + summary_usage.get(key, 0)
+            usage["estimatedCostUsd"] = usage.get("estimatedCostUsd", 0) + summary_usage.get("estimatedCostUsd", 0)
+
+    refresh_started = time.perf_counter()
     fresh_db = crud.get_user_database_state(session, user.id)
+    trace_steps.append({
+        "kind": "persistence",
+        "name": "Refresh database",
+        "durationMs": round((time.perf_counter() - refresh_started) * 1000),
+    })
+    total_ms = round((time.perf_counter() - request_started) * 1000)
+    slowest = max(trace_steps, key=lambda item: item["durationMs"], default=None)
+    trace = {
+        "requestId": request_id,
+        "totalMs": total_ms,
+        "agentSteps": sum(1 for item in trace_steps if item["kind"] == "llm"),
+        "modelMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "llm"),
+        "toolMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "tool"),
+        "contextMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "context"),
+        "persistenceMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "persistence"),
+        "slowestStep": slowest,
+        "steps": trace_steps,
+    }
+    print(json.dumps({"event": "ai_trace", **trace}, separators=(",", ":")))
     return {
         "reply": reply_text,
         "actionExecuted": action_executed,
         "toolsUsed": tools_used,
         "usage": usage,
+        "trace": trace,
         "db": fresh_db,
+        "historyCompacted": history_compacted,
     }
 
 

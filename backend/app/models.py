@@ -6,7 +6,7 @@ Attribute names are snake_case to match the DB columns. The API layer
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, TIMESTAMP, Column, text
+from sqlalchemy import JSON, TIMESTAMP, Column, func
 from sqlmodel import Field, SQLModel
 
 
@@ -68,7 +68,19 @@ class Message(SQLModel, table=True):
     content: str
     summary_id: Optional[str] = None  # set once summarized -> excluded from active context
     created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=text("now()")))
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
+
+
+class ChatSession(SQLModel, table=True):
+    """A user-visible AI conversation, similar to a ChatGPT chat."""
+    __tablename__ = "chat_sessions"
+    id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    title: str = "New chat"
+    created_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
+    updated_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
 
 
 class ToolLog(SQLModel, table=True):
@@ -83,4 +95,35 @@ class ToolLog(SQLModel, table=True):
     status: str = "success"
     error_message: Optional[str] = None
     created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=text("now()")))
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
+
+
+class AIRequestMetric(SQLModel, table=True):
+    """Sanitized per-request AI performance telemetry, scoped to one user."""
+    __tablename__ = "ai_request_metrics"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: str = Field(index=True, unique=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    thread_id: str = Field(default="default", index=True)
+    status: str = "success"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    total_ms: int = 0
+    round_trip_ms: Optional[int] = None
+    agent_steps: int = 0
+    model_ms: int = 0
+    tool_ms: int = 0
+    context_ms: int = 0
+    persistence_ms: int = 0
+    slowest_step_name: Optional[str] = None
+    slowest_step_kind: Optional[str] = None
+    slowest_step_ms: Optional[int] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    tools_used: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    steps: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    error_type: Optional[str] = None
+    created_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))

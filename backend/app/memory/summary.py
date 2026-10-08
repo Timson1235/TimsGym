@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from ..config import settings
 from ..models import Message
+from ..agent.claude_provider import generate_claude_text
 from .flags import flags
 from .store import embed, to_vec_literal
 
@@ -46,10 +47,11 @@ Conversation:
 {transcript}"""
 
 
-def summarize_conversation(session: Session, user_id: int, thread_id: str) -> Optional[dict]:
-    """Summarize all un-summarized messages in a thread, store the summary, and
-    mark those messages so they drop out of the active context."""
-    if not flags.summary or _client is None:
+def summarize_conversation(
+    session: Session, user_id: int, thread_id: str, keep_recent: int = 4,
+) -> Optional[dict]:
+    """Compress older active turns while leaving the latest exchange visible."""
+    if not flags.summary or (_client is None and not settings.CLAUDE_API_KEY):
         return None
 
     rows = session.exec(
@@ -57,21 +59,44 @@ def summarize_conversation(session: Session, user_id: int, thread_id: str) -> Op
         .where(Message.user_id == user_id, Message.thread_id == thread_id, Message.summary_id == None)  # noqa: E711
         .order_by(Message.id)
     ).all()
-    if not rows:
+    if len(rows) <= keep_recent:
         return None
+
+    rows = rows[:-keep_recent]
 
     transcript = "\n".join(f"[{m.role.upper()}] {m.content}" for m in rows)
 
-    resp = _client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=_SUMMARY_PROMPT.format(transcript=transcript[:8000]),
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json", temperature=0.2,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    )
+    if settings.CLAUDE_API_KEY:
+        generated = generate_claude_text(
+            api_key=settings.CLAUDE_API_KEY,
+            model=settings.CLAUDE_MODEL,
+            system="Return only valid JSON. Preserve user-stated facts exactly.",
+            prompt=_SUMMARY_PROMPT.format(transcript=transcript[:12000]),
+        )
+        raw_text = generated["text"]
+        summary_usage = generated["usage"]
+    else:
+        resp = _client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=_SUMMARY_PROMPT.format(transcript=transcript[:8000]),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0.2,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        raw_text = resp.text or "{}"
+        metadata = getattr(resp, "usage_metadata", None)
+        input_tokens = getattr(metadata, "prompt_token_count", 0) or 0
+        output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
+        summary_usage = {
+            "provider": "gemini", "model": "gemini-2.5-flash",
+            "inputTokens": input_tokens, "outputTokens": output_tokens,
+            "cacheCreationTokens": 0, "cacheReadTokens": 0,
+            "totalTokens": input_tokens + output_tokens, "estimatedCostUsd": 0,
+        }
     try:
-        data = json.loads(resp.text or "{}")
+        cleaned = raw_text.strip().removeprefix("```json").removesuffix("```").strip()
+        data = json.loads(cleaned)
     except Exception:
         data = {}
     summary_text = (data.get("summary") or transcript[:500]).strip()
@@ -90,7 +115,10 @@ def summarize_conversation(session: Session, user_id: int, thread_id: str) -> Op
         m.summary_id = summary_id
         session.add(m)
     session.commit()
-    return {"id": summary_id, "description": description, "summary": summary_text, "num_messages": len(rows)}
+    return {
+        "id": summary_id, "description": description, "summary": summary_text,
+        "num_messages": len(rows), "usage": summary_usage,
+    }
 
 
 def read_summary_context(session: Session, user_id: int, thread_id: str, k: int = 3) -> str:

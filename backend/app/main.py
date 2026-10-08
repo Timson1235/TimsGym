@@ -12,8 +12,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .routers import ai as ai_router
 from .routers import db as db_router
+from .observability import ensure_observability_schema
 
 app = FastAPI(title="TimsGym API", version="0.2.0")
+
+
+@app.on_event("startup")
+def create_observability_table():
+    try:
+        ensure_observability_schema()
+    except Exception as error:
+        # Telemetry must never prevent the application from starting.
+        print(f'[observability] schema check failed: {type(error).__name__}')
 
 # Built frontend (vite build -> TimsGym/dist). In prod this one service serves
 # both the React app and the API. Override location with DIST_DIR if needed.

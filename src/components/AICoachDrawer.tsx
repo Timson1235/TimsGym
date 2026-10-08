@@ -3,6 +3,7 @@ import { Sparkles, Send, Bot, User, X, Loader2, Dumbbell, ArrowRight, Zap, Refre
 import { AIChatMessage, WorkoutSession } from '../types';
 import { clearAIChatHistory, fetchAIChatHistory, sendAIChatMessage } from '../lib/api';
 import { ChatMarkdown } from './ChatMarkdown';
+import { AITraceDetails } from './AITraceDetails';
 import {
   AIUsageMeter,
   EMPTY_AI_USAGE,
@@ -92,6 +93,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         toolsUsed: res.toolsUsed,
         usage: res.usage,
+        trace: res.trace,
       };
 
       setMessages((prev) => [...prev, aiMsg]);
@@ -116,6 +118,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
         content: `📋 **Conversation Summary**:\n\n${res.reply || 'Summary complete.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         usage: res.usage,
+        trace: res.trace,
       };
       setMessages([DEFAULT_DRAWER_WELCOME, summaryMsg]);
     } catch (e) {
@@ -225,6 +228,9 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
                   <div className="mt-1 text-[9px] font-mono text-slate-500">
                     {formatAIUsage(msg.usage)}
                   </div>
+                )}
+                {msg.role === 'assistant' && msg.trace && (
+                  <AITraceDetails trace={msg.trace} dark />
                 )}
                 <div
                   className={`text-[9px] text-right font-mono ${

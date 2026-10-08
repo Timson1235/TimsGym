@@ -2,6 +2,7 @@ import 'dotenv/config'; // MUST be first: loads .env before any module (e.g. db/
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
@@ -192,6 +193,61 @@ function claimsWorkoutStartedWithoutTool(reply: string, actionExecuted: any) {
   return /(workout|training).{0,30}(gestartet|erstellt|vorbereitet)|tool.{0,30}(genutzt|verwendet|erstellt)/i.test(reply);
 }
 
+function requestedMemoryTool(message: string): 'save_personal_memory' | 'remove_personal_memory' | undefined {
+  const normalized = (message || '').trim().toLowerCase();
+  const remove = /\b(forget|remove|delete)\b.{0,35}\bmemory\b|\b(vergiss|lösche|entferne)\b.{0,25}\b(erinnerung|gedächtnis|memory)?\b/.test(normalized);
+  if (remove) return 'remove_personal_memory';
+  const save = /\b(add|save|store|remember)\b.{0,35}\bmemory\b|\bmemory\b.{0,35}\b(add|save|store)\b|\b(merk|merke|speicher|speichere)\b.{0,20}\b(dir|erinnerung|gedächtnis)?\b/.test(normalized);
+  return save ? 'save_personal_memory' : undefined;
+}
+
+const EXERCISE_ALIASES: Record<string, string> = {
+  kniebuge: 'Barbell Back Squat',
+  kniebeuge: 'Barbell Back Squat',
+  squat: 'Barbell Back Squat',
+  'back squat': 'Barbell Back Squat',
+  'barbell squat': 'Barbell Back Squat',
+  rdl: 'Romanian Deadlift',
+  'romanian dead lift': 'Romanian Deadlift',
+  schragbank: 'Schrägbank 30°',
+  'schragbank 30': 'Schrägbank 30°',
+  'schragbank 30 grad': 'Schrägbank 30°',
+  'schraegbank 30 grad': 'Schrägbank 30°',
+  'incline barbell press': 'Schrägbank 30°',
+  'rudern maschine': 'Rudermaschine',
+  'chest supported row': 'Rudermaschine',
+  'schulterdrucken kh': 'Schulterdrücken KH',
+  'dumbbell shoulder press': 'Schulterdrücken KH',
+  'cable bicep curl': 'Bizeps Kabel',
+  'kabel bizeps': 'Bizeps Kabel',
+  'kabel seitheben': 'Kabel-Seitheben',
+  'pallof press kabelzug': 'Pallof Press',
+};
+
+function normalizeExerciseName(value: string) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function resolveCanonicalExercise(exercises: any[], query: string) {
+  const normalized = normalizeExerciseName(query);
+  const byName = new Map(exercises.map((item) => [normalizeExerciseName(item.name), item]));
+  const direct = byName.get(normalized);
+  if (direct) return { match: direct, candidates: [] };
+  const aliasTarget = EXERCISE_ALIASES[normalized];
+  const aliasMatch = aliasTarget ? byName.get(normalizeExerciseName(aliasTarget)) : undefined;
+  if (aliasMatch) return { match: aliasMatch, candidates: [] };
+  const candidates = exercises.filter((item) => {
+    const candidate = normalizeExerciseName(item.name);
+    return normalized && (candidate.includes(normalized) || normalized.includes(candidate));
+  });
+  return { match: candidates.length === 1 ? candidates[0] : null, candidates };
+}
+
 async function getUserFromRequest(req: express.Request) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -209,6 +265,166 @@ async function getUserFromRequest(req: express.Request) {
   } catch (error) {
     console.error('Token verification error:', error);
     return null;
+  }
+}
+
+let aiMetricsTableReady = false;
+let chatSessionsTableReady = false;
+
+async function ensureChatSessionsTable() {
+  if (chatSessionsTableReady) return;
+  await createPool().query(`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'New chat',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_id ON chat_sessions(user_id);
+  `);
+  chatSessionsTableReady = true;
+}
+
+async function ensureDefaultChatSession(userId: number) {
+  await ensureChatSessionsTable();
+  await createPool().query(
+    `INSERT INTO chat_sessions (id, user_id, title) VALUES ($1, $2, 'Training chat')
+     ON CONFLICT (id) DO NOTHING`,
+    [String(userId), userId],
+  );
+}
+
+async function ownsChatSession(userId: number, threadId: string) {
+  const result = await createPool().query(
+    'SELECT 1 FROM chat_sessions WHERE id = $1 AND user_id = $2',
+    [threadId, userId],
+  );
+  return result.rowCount === 1;
+}
+
+async function compactChatIfNeeded(userId: number, threadId: string) {
+  const result = await createPool().query(
+    `SELECT id, role, content FROM messages
+     WHERE user_id = $1 AND thread_id = $2 AND summary_id IS NULL
+     ORDER BY id ASC`,
+    [userId, threadId],
+  );
+  const tokenEstimate = result.rows.reduce((sum, row) => sum + String(row.content || '').length, 0) / 4;
+  if (tokenEstimate <= 2400 || result.rows.length <= 4) return { compacted: false, usage: null };
+
+  const rowsToCompact = result.rows.slice(0, -4);
+  const transcript = rowsToCompact.map((row) => `[${row.role.toUpperCase()}] ${row.content}`).join('\n');
+  const response = await generateContentResilient({
+    contents: `Summarize this older fitness-coaching conversation. Preserve only user-stated constraints, preferences, corrections and open questions. Do not repeat workout loads already stored in the database. Be concise.\n\n${transcript.slice(0, 12000)}`,
+    config: { systemInstruction: 'Return a concise factual memory summary without markdown preamble.' },
+  });
+  const summaryText = String(response.text || '').trim() || transcript.slice(0, 700);
+  const summaryId = randomUUID().replace(/-/g, '').slice(0, 8);
+  const client = await createPool().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO summaries (id, user_id, thread_id, description, summary_text, full_content)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [summaryId, userId, threadId, 'Earlier conversation', summaryText, transcript],
+    );
+    await client.query(
+      'UPDATE messages SET summary_id = $1 WHERE user_id = $2 AND thread_id = $3 AND id = ANY($4::int[])',
+      [summaryId, userId, threadId, rowsToCompact.map((row) => row.id)],
+    );
+    await client.query('COMMIT');
+    return { compacted: true, usage: response.usage || null };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function ensureAiMetricsTable() {
+  if (aiMetricsTableReady) return;
+  await createPool().query(`
+    CREATE TABLE IF NOT EXISTS ai_request_metrics (
+      id BIGSERIAL PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      thread_id TEXT NOT NULL DEFAULT 'default',
+      status TEXT NOT NULL DEFAULT 'success',
+      provider TEXT,
+      model TEXT,
+      total_ms INTEGER NOT NULL DEFAULT 0,
+      round_trip_ms INTEGER,
+      agent_steps INTEGER NOT NULL DEFAULT 0,
+      model_ms INTEGER NOT NULL DEFAULT 0,
+      tool_ms INTEGER NOT NULL DEFAULT 0,
+      context_ms INTEGER NOT NULL DEFAULT 0,
+      persistence_ms INTEGER NOT NULL DEFAULT 0,
+      slowest_step_name TEXT,
+      slowest_step_kind TEXT,
+      slowest_step_ms INTEGER,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      tools_used JSONB,
+      steps JSONB,
+      error_type TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_ai_request_metrics_user_id ON ai_request_metrics(user_id);
+    CREATE INDEX IF NOT EXISTS ix_ai_request_metrics_thread_id ON ai_request_metrics(thread_id);
+    CREATE INDEX IF NOT EXISTS ix_ai_request_metrics_created_at ON ai_request_metrics(created_at);
+  `);
+  aiMetricsTableReady = true;
+}
+
+async function writeAiRequestMetric(params: {
+  userId: number;
+  threadId: string;
+  trace: any;
+  usage?: any;
+  toolsUsed?: string[];
+  status?: string;
+  errorType?: string;
+}) {
+  try {
+    await ensureAiMetricsTable();
+    const usage = params.usage || {};
+    const slowest = params.trace.slowestStep || {};
+    await createPool().query(
+      `INSERT INTO ai_request_metrics (
+        request_id, user_id, thread_id, status, provider, model,
+        total_ms, agent_steps, model_ms, tool_ms, context_ms, persistence_ms,
+        slowest_step_name, slowest_step_kind, slowest_step_ms,
+        input_tokens, output_tokens, total_tokens, estimated_cost_usd,
+        tools_used, steps, error_type
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15,
+        $16, $17, $18, $19,
+        $20::jsonb, $21::jsonb, $22
+      )`,
+      [
+        params.trace.requestId, params.userId, params.threadId,
+        params.status || 'success', usage.provider || null, usage.model || null,
+        params.trace.totalMs || 0, params.trace.agentSteps || 0,
+        params.trace.modelMs || 0, params.trace.toolMs || 0,
+        params.trace.contextMs || 0, params.trace.persistenceMs || 0,
+        slowest.name || null, slowest.kind || null, slowest.durationMs || null,
+        usage.inputTokens || 0, usage.outputTokens || 0, usage.totalTokens || 0,
+        usage.estimatedCostUsd || 0, JSON.stringify(params.toolsUsed || []),
+        JSON.stringify(params.trace.steps || []), params.errorType || null,
+      ],
+    );
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'ai_metric_write_failed',
+      requestId: params.trace?.requestId,
+      errorType: error?.constructor?.name || 'Error',
+    }));
   }
 }
 
@@ -495,6 +711,11 @@ async function startServer() {
 
   // Initialize DB file
   readDatabase();
+  try {
+    await ensureAiMetricsTable();
+  } catch (error: any) {
+    console.warn(`[observability] schema check failed: ${error?.constructor?.name || 'Error'}`);
+  }
 
   // API Routes
   app.get('/api/health', (req, res) => {
@@ -658,13 +879,16 @@ async function startServer() {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    await ensureDefaultChatSession(sqlUser.id);
+    const threadId = String(req.query.threadId || sqlUser.id);
+    if (!await ownsChatSession(sqlUser.id, threadId)) return res.status(404).json({ error: 'Chat session not found' });
     const result = await createPool().query(
       `SELECT id, role, content, created_at
        FROM messages
-       WHERE user_id = $1 AND thread_id = $2
+       WHERE user_id = $1 AND thread_id = $2 AND summary_id IS NULL
        ORDER BY id DESC
        LIMIT 200`,
-      [sqlUser.id, String(sqlUser.id)],
+      [sqlUser.id, threadId],
     );
     res.json({
       messages: result.rows.reverse().map((message) => ({
@@ -682,22 +906,119 @@ async function startServer() {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    await ensureDefaultChatSession(sqlUser.id);
+    const threadId = String(req.query.threadId || sqlUser.id);
+    if (!await ownsChatSession(sqlUser.id, threadId)) return res.status(404).json({ error: 'Chat session not found' });
     await createPool().query(
       'DELETE FROM messages WHERE user_id = $1 AND thread_id = $2',
-      [sqlUser.id, String(sqlUser.id)],
+      [sqlUser.id, threadId],
+    );
+    await createPool().query(
+      'DELETE FROM summaries WHERE user_id = $1 AND thread_id = $2',
+      [sqlUser.id, threadId],
     );
     res.json({ success: true });
   });
 
+  app.get('/api/ai/sessions', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) return res.status(401).json({ error: 'Authentication required' });
+    await ensureDefaultChatSession(sqlUser.id);
+    const result = await createPool().query(
+      `SELECT id, title, created_at, updated_at FROM chat_sessions
+       WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC`,
+      [sqlUser.id],
+    );
+    res.json({ sessions: result.rows.map((row) => ({
+      id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at,
+    })) });
+  });
+
+  app.get('/api/ai/usage', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) return res.status(401).json({ error: 'Authentication required' });
+    await ensureAiMetricsTable();
+    const result = await createPool().query(
+      `SELECT
+         COUNT(*)::int AS all_requests,
+         COALESCE(SUM(input_tokens), 0)::bigint AS all_input_tokens,
+         COALESCE(SUM(output_tokens), 0)::bigint AS all_output_tokens,
+         COALESCE(SUM(total_tokens), 0)::bigint AS all_total_tokens,
+         COALESCE(SUM(estimated_cost_usd), 0)::double precision AS all_cost,
+         COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))::int AS month_requests,
+         COALESCE(SUM(input_tokens) FILTER (WHERE created_at >= date_trunc('month', NOW())), 0)::bigint AS month_input_tokens,
+         COALESCE(SUM(output_tokens) FILTER (WHERE created_at >= date_trunc('month', NOW())), 0)::bigint AS month_output_tokens,
+         COALESCE(SUM(total_tokens) FILTER (WHERE created_at >= date_trunc('month', NOW())), 0)::bigint AS month_total_tokens,
+         COALESCE(SUM(estimated_cost_usd) FILTER (WHERE created_at >= date_trunc('month', NOW())), 0)::double precision AS month_cost,
+         MIN(created_at) AS tracking_since
+       FROM ai_request_metrics WHERE user_id = $1`,
+      [sqlUser.id],
+    );
+    const row = result.rows[0];
+    const period = (prefix: 'all' | 'month') => ({
+      requests: Number(row[`${prefix}_requests`] || 0),
+      inputTokens: Number(row[`${prefix}_input_tokens`] || 0),
+      outputTokens: Number(row[`${prefix}_output_tokens`] || 0),
+      totalTokens: Number(row[`${prefix}_total_tokens`] || 0),
+      estimatedCostUsd: Number(row[`${prefix}_cost`] || 0),
+    });
+    res.json({ allTime: period('all'), currentMonth: period('month'), trackingSince: row.tracking_since });
+  });
+
+  app.post('/api/ai/sessions', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) return res.status(401).json({ error: 'Authentication required' });
+    await ensureChatSessionsTable();
+    const id = randomUUID();
+    const title = String(req.body.title || 'New chat').trim().slice(0, 80) || 'New chat';
+    await createPool().query(
+      'INSERT INTO chat_sessions (id, user_id, title) VALUES ($1, $2, $3)',
+      [id, sqlUser.id, title],
+    );
+    res.json({ session: { id, title } });
+  });
+
+  app.delete('/api/ai/sessions/:threadId', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) return res.status(401).json({ error: 'Authentication required' });
+    const threadId = String(req.params.threadId);
+    if (!await ownsChatSession(sqlUser.id, threadId)) return res.status(404).json({ error: 'Chat session not found' });
+    const client = await createPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM tool_logs WHERE user_id = $1 AND thread_id = $2', [sqlUser.id, threadId]);
+      await client.query('DELETE FROM messages WHERE user_id = $1 AND thread_id = $2', [sqlUser.id, threadId]);
+      await client.query('DELETE FROM summaries WHERE user_id = $1 AND thread_id = $2', [sqlUser.id, threadId]);
+      await client.query('DELETE FROM chat_sessions WHERE id = $1 AND user_id = $2', [threadId, sqlUser.id]);
+      await client.query('COMMIT');
+      res.json({ success: true });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
   // Gemini AI Assistant Endpoint with full database write/action capabilities
   app.post('/api/ai/chat', async (req, res) => {
+    const requestStarted = performance.now();
+    const requestId = randomUUID();
+    const traceSteps: any[] = [];
+    let sqlUser: any = null;
+    let requestThreadId = 'anonymous';
     try {
       const { message, activeWorkoutState } = req.body;
       let db = readDatabase();
-      const sqlUser = await getUserFromRequest(req);
+      sqlUser = await getUserFromRequest(req);
+      const threadId = String(req.body.threadId || sqlUser?.id || 'anonymous');
+      requestThreadId = threadId;
       let chatHistory: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+      let summaryMemory = '';
       if (sqlUser) {
         try {
+          await ensureDefaultChatSession(sqlUser.id);
+          if (!await ownsChatSession(sqlUser.id, threadId)) return res.status(404).json({ error: 'Chat session not found' });
           const cloudDb = await getUserDatabaseState(sqlUser.id);
           if (cloudDb.exercises.length === 0) {
             cloudDb.exercises = INITIAL_DB.exercises;
@@ -705,14 +1026,20 @@ async function startServer() {
           db = cloudDb;
           const historyResult = await createPool().query(
             `SELECT role, content FROM messages
-             WHERE user_id = $1 AND thread_id = $2
+             WHERE user_id = $1 AND thread_id = $2 AND summary_id IS NULL
              ORDER BY id DESC LIMIT 20`,
-            [sqlUser.id, String(sqlUser.id)],
+            [sqlUser.id, threadId],
           );
           chatHistory = historyResult.rows.reverse().map((entry) => ({
             role: entry.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: entry.content }],
           }));
+          const summaries = await createPool().query(
+            `SELECT summary_text FROM summaries
+             WHERE user_id = $1 AND thread_id = $2 ORDER BY created_at DESC LIMIT 3`,
+            [sqlUser.id, threadId],
+          );
+          summaryMemory = summaries.rows.map((row) => row.summary_text).join('\n\n');
         } catch (e) {
           console.error('Error fetching cloud db for AI chat:', e);
         }
@@ -760,12 +1087,19 @@ async function startServer() {
           }).join('\n');
       }
 
+      const currentBerlinTime = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Berlin', weekday: 'long', year: 'numeric', month: '2-digit',
+        day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(new Date());
       const systemInstruction = `You are GymPulse AI, a concise fitness assistant with direct read/write access to Tim's database.
+CURRENT LOCAL DATE AND TIME: ${currentBerlinTime} (Europe/Berlin).
+Resolve relative dates such as today, yesterday and tomorrow from this value before calling tools.
 RESPONSE STYLE: DIRECT AND PRECISE.
 - ZERO greetings, NO parasocial fluff, NO "Hey Tim!", NO "What are we tackling today?".
 - Outside workout drafts, answer in 1-3 short lines or concise bullet points.
 - Workout drafts must be complete enough to verify every exercise, set, rep and load.
-- If the user shares a goal (e.g. "Ich will Muskeln aufbauen", "Gewicht verlieren", "Sprungkraft verbessern", "Habe Schulterschmerzen"), call \`save_personal_memory\` to permanently remember it!
+- If the user explicitly asks to remember, save, or add a durable fact to memory, call \`save_personal_memory\` in that same turn. Do not claim that you cannot save it.
+- Do not automatically store facts the user did not explicitly ask you to remember.
 
 ACTIONS AVAILABLE:
 - To save personal memory/goals: call \`save_personal_memory\`
@@ -774,6 +1108,10 @@ ACTIONS AVAILABLE:
 - To add an exercise: call \`add_exercise\`
 - To update profile: call \`update_profile\`
 - To delete a workout: call \`delete_workout\`
+- Resolve colloquial, abbreviated, translated, or non-library exercise names with
+  \`resolve_exercise\`, then use its canonical exerciseName in every write tool.
+- If resolution returns not_found, call \`add_exercise\` once and retry the original
+  write. Never invent a temporary exercise ID or alternate spelling.
 - \`start_workout_session\` is available only after explicit confirmation.
 - If one user message requests multiple actions, execute every required tool in the same turn.
   Example: deleting an empty workout and logging the completed replacement requires both
@@ -799,6 +1137,9 @@ ${recentWorkouts}
 
 --- CURRENT ACTIVE SESSION ---
 ${activeWorkoutContext}
+
+--- COMPRESSED MEMORY FROM EARLIER TURNS ---
+${summaryMemory || 'None yet.'}
 =============================`;
 
       const aiRequest = {
@@ -834,8 +1175,19 @@ ${activeWorkoutContext}
                   }
                 },
                 {
+                  name: 'resolve_exercise',
+                  description: 'Resolve colloquial German or English exercise wording to the permanent canonical library name and ID. Call before logging when a name was not copied exactly from the exercise library.',
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      query: { type: Type.STRING, description: 'Exercise wording to resolve, e.g. Kniebeuge or RDL' }
+                    },
+                    required: ['query']
+                  }
+                },
+                {
                   name: 'log_workout',
-                  description: 'Log a completed workout only when the user says it was performed. Preserve the exact agreed date, exercises, ordered sets, weights, reps, set types, and RPE; do not invent missing values.',
+                  description: 'Log a completed workout only when the user says it was performed. Exercise names must resolve to permanent library exercises; call resolve_exercise first for colloquial names. Preserve exact dates and sets and never invent values.',
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
@@ -951,6 +1303,11 @@ ${activeWorkoutContext}
           ]
         },
       };
+      traceSteps.push({
+        kind: 'context',
+        name: 'Database and context',
+        durationMs: Math.round(performance.now() - requestStarted),
+      });
 
       let actionExecuted: any = null;
       const actionsExecuted: any[] = [];
@@ -967,8 +1324,10 @@ ${activeWorkoutContext}
       };
 
       const executeToolCall = async (call: any) => {
+        const toolStarted = performance.now();
         const args: any = call.args || {};
         const actionCountBefore = actionsExecuted.length;
+        let informationalResult: any = null;
         toolsUsed.push(call.name);
 
           if (call.name === 'save_personal_memory') {
@@ -999,11 +1358,31 @@ ${activeWorkoutContext}
             actionExecuted = { type: 'memory_removed', data: args.memoryTextOrIndex };
             actionsExecuted.push(actionExecuted);
 
+          } else if (call.name === 'resolve_exercise') {
+            const resolved = resolveCanonicalExercise(db.exercises, args.query || '');
+            informationalResult = resolved.match
+              ? { status: 'resolved', exerciseName: resolved.match.name, id: resolved.match.id, category: resolved.match.category }
+              : resolved.candidates.length > 0
+                ? { status: 'ambiguous', candidates: resolved.candidates.slice(0, 5).map((item: any) => item.name) }
+                : { status: 'not_found', instruction: 'Call add_exercise before logging this genuinely new movement.' };
+
           } else if (call.name === 'log_workout') {
             const todayStr = new Date().toISOString().split('T')[0];
+            const resolvedExercises = (args.exercises || []).map((item: any) => ({
+              item,
+              ...resolveCanonicalExercise(db.exercises, item.exerciseName || ''),
+            }));
+            const unresolved = resolvedExercises.filter((item: any) => !item.match);
+            if (unresolved.length > 0) {
+              traceSteps.push({ kind: 'tool', name: call.name, durationMs: Math.round(performance.now() - toolStarted), status: 'error' });
+              return JSON.stringify({
+                success: false,
+                error: `Unknown or ambiguous exercises: ${unresolved.map((item: any) => item.item.exerciseName).join(', ')}`,
+                instruction: 'Call resolve_exercise for aliases or add_exercise for a genuinely new movement, then retry log_workout.',
+              });
+            }
             const workoutExercises = (args.exercises || []).map((exItem: any, exIdx: number) => {
-              // Find or default exercise ID
-              const matchingEx = db.exercises.find((e: any) => e.name.toLowerCase() === (exItem.exerciseName || '').toLowerCase());
+              const matchingEx = resolvedExercises[exIdx].match;
               const sets = (exItem.sets || []).map((s: any, sIdx: number) => ({
                 id: `s_${Date.now()}_${exIdx}_${sIdx}`,
                 setNumber: sIdx + 1,
@@ -1016,9 +1395,9 @@ ${activeWorkoutContext}
 
               return {
                 id: `we_${Date.now()}_${exIdx}`,
-                exerciseId: matchingEx ? matchingEx.id : `ex_dyn_${Date.now()}_${exIdx}`,
-                exerciseName: exItem.exerciseName || 'Custom Movement',
-                category: exItem.category || (matchingEx ? matchingEx.category : 'Chest'),
+                exerciseId: matchingEx.id,
+                exerciseName: matchingEx.name,
+                category: matchingEx.category,
                 sets
               };
             });
@@ -1101,14 +1480,26 @@ ${activeWorkoutContext}
             }
 
           } else if (call.name === 'start_workout_session') {
+            const resolvedPlanned = (args.exercises || []).map((planned: any) => ({
+              planned,
+              ...resolveCanonicalExercise(db.exercises, planned.exerciseName || ''),
+            }));
+            const unresolved = resolvedPlanned.filter((item: any) => !item.match);
+            if (unresolved.length > 0) {
+              traceSteps.push({ kind: 'tool', name: call.name, durationMs: Math.round(performance.now() - toolStarted), status: 'error' });
+              return JSON.stringify({
+                success: false,
+                error: `Unknown or ambiguous exercises: ${unresolved.map((item: any) => item.planned.exerciseName).join(', ')}`,
+                instruction: 'Resolve or add every exercise before retrying start_workout_session.',
+              });
+            }
             const sessionExercises = (args.exercises || []).map((planned: any, idx: number) => {
-              const name = planned.exerciseName;
-              const matchingEx = db.exercises.find((e: any) => e.name.toLowerCase() === name.toLowerCase());
+              const matchingEx = resolvedPlanned[idx].match;
               return {
                 id: `we_${Date.now()}_${idx}`,
-                exerciseId: matchingEx ? matchingEx.id : `ex_temp_${idx}`,
-                exerciseName: matchingEx ? matchingEx.name : name,
-                category: matchingEx ? matchingEx.category : 'Other',
+                exerciseId: matchingEx.id,
+                exerciseName: matchingEx.name,
+                category: matchingEx.category,
                 notes: planned.notes,
                 sets: (planned.sets || []).map((set: any, setIdx: number) => ({
                   id: `s_${Date.now()}_${idx}_${setIdx}`,
@@ -1140,6 +1531,13 @@ ${activeWorkoutContext}
         const currentAction = actionsExecuted.length > actionCountBefore
           ? actionsExecuted[actionsExecuted.length - 1]
           : null;
+        traceSteps.push({
+          kind: 'tool',
+          name: call.name,
+          durationMs: Math.round(performance.now() - toolStarted),
+          status: currentAction || informationalResult ? 'success' : 'no_change',
+        });
+        if (informationalResult) return JSON.stringify({ success: true, tool: call.name, result: informationalResult });
         return JSON.stringify({
           success: Boolean(currentAction),
           tool: call.name,
@@ -1151,11 +1549,22 @@ ${activeWorkoutContext}
       let response: any = null;
       let replyText = '';
       let claudeMessages: any[] | undefined;
+      const memoryToolName = requestedMemoryTool(message);
       for (let step = 0; step < 4; step += 1) {
+        const modelStarted = performance.now();
         response = await generateContentResilient({
           ...aiRequest,
-          forceToolName: step === 0 && canStartWorkout ? 'start_workout_session' : undefined,
+          forceToolName: step === 0
+            ? (canStartWorkout ? 'start_workout_session' : memoryToolName)
+            : undefined,
           claudeMessages,
+        });
+        traceSteps.push({
+          kind: 'llm',
+          name: `${response.provider === 'claude' ? 'Claude' : 'Gemini'} round ${step + 1}`,
+          durationMs: Math.round(performance.now() - modelStarted),
+          step: step + 1,
+          provider: response.provider,
         });
         if (response.usage) {
           usage.provider = response.usage.provider;
@@ -1222,18 +1631,79 @@ ${activeWorkoutContext}
         replyText = "Der bestätigte Plan ist jetzt als Workout-Karte vorbereitet. Prüf ihn kurz und klick auf **Workout starten**.";
       } else if (canStartWorkout) {
         replyText = "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht gestartet; bitte versuche die Bestätigung erneut.";
+      } else if (memoryToolName && !toolsUsed.includes(memoryToolName)) {
+        replyText = "Ich konnte die gewünschte Änderung nicht im persönlichen Gedächtnis speichern. Bitte versuche es erneut.";
       } else if (claimsWorkoutStartedWithoutTool(replyText, actionExecuted)) {
         replyText = canStartWorkout
           ? "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht gestartet; bitte versuche die Bestätigung erneut."
           : `Das Workout wurde noch nicht gestartet. Ich muss zuerst den vollständigen Plan bestätigen lassen: ${WORKOUT_CONFIRMATION_QUESTION}`;
       }
 
+      const persistenceStarted = performance.now();
       if (sqlUser) {
         await createPool().query(
           `INSERT INTO messages (user_id, thread_id, role, content)
            VALUES ($1, $2, 'user', $3), ($1, $2, 'assistant', $4)`,
-          [sqlUser.id, String(sqlUser.id), message, replyText],
+          [sqlUser.id, threadId, message, replyText],
         );
+        const cleanTitle = String(message || '').trim().replace(/\s+/g, ' ');
+        await createPool().query(
+          `UPDATE chat_sessions
+           SET title = CASE WHEN title = 'New chat' THEN $1 ELSE title END, updated_at = NOW()
+           WHERE id = $2 AND user_id = $3`,
+          [cleanTitle.length > 57 ? `${cleanTitle.slice(0, 57)}...` : cleanTitle || 'New chat', threadId, sqlUser.id],
+        );
+      }
+      traceSteps.push({
+        kind: 'persistence',
+        name: 'Persist response',
+        durationMs: Math.round(performance.now() - persistenceStarted),
+      });
+      let historyCompacted = false;
+      if (sqlUser) {
+        const summaryStarted = performance.now();
+        const compaction = await compactChatIfNeeded(sqlUser.id, threadId);
+        historyCompacted = compaction.compacted;
+        if (historyCompacted) {
+          const summaryUsage = compaction.usage || {};
+          usage.inputTokens += summaryUsage.inputTokens || 0;
+          usage.outputTokens += summaryUsage.outputTokens || 0;
+          usage.cacheCreationTokens += summaryUsage.cacheCreationTokens || 0;
+          usage.cacheReadTokens += summaryUsage.cacheReadTokens || 0;
+          usage.totalTokens += (summaryUsage.inputTokens || 0) + (summaryUsage.outputTokens || 0)
+            + (summaryUsage.cacheCreationTokens || 0) + (summaryUsage.cacheReadTokens || 0);
+          usage.estimatedCostUsd += summaryUsage.estimatedCostUsd || 0;
+          traceSteps.push({
+            kind: 'llm', name: 'Conversation summary',
+            durationMs: Math.round(performance.now() - summaryStarted),
+            provider: claude ? 'claude' : 'gemini',
+          });
+        }
+      }
+      const slowestStep = traceSteps.reduce(
+        (slowest, item) => !slowest || item.durationMs > slowest.durationMs ? item : slowest,
+        null,
+      );
+      const trace = {
+        requestId,
+        totalMs: Math.round(performance.now() - requestStarted),
+        agentSteps: traceSteps.filter((item) => item.kind === 'llm').length,
+        modelMs: traceSteps.filter((item) => item.kind === 'llm').reduce((sum, item) => sum + item.durationMs, 0),
+        toolMs: traceSteps.filter((item) => item.kind === 'tool').reduce((sum, item) => sum + item.durationMs, 0),
+        contextMs: traceSteps.filter((item) => item.kind === 'context').reduce((sum, item) => sum + item.durationMs, 0),
+        persistenceMs: traceSteps.filter((item) => item.kind === 'persistence').reduce((sum, item) => sum + item.durationMs, 0),
+        slowestStep,
+        steps: traceSteps,
+      };
+      console.info(JSON.stringify({ event: 'ai_trace', ...trace }));
+      if (sqlUser) {
+        await writeAiRequestMetric({
+          userId: sqlUser.id,
+          threadId,
+          trace,
+          usage,
+          toolsUsed,
+        });
       }
 
       res.json({
@@ -1242,10 +1712,31 @@ ${activeWorkoutContext}
         actionsExecuted,
         toolsUsed,
         usage,
+        trace,
         db,
+        historyCompacted,
       });
     } catch (error: any) {
       console.error("AI Chat Error:", error);
+      if (sqlUser) {
+        await writeAiRequestMetric({
+          userId: sqlUser.id,
+          threadId: requestThreadId,
+          trace: {
+            requestId,
+            totalMs: Math.round(performance.now() - requestStarted),
+            agentSteps: traceSteps.filter((item) => item.kind === 'llm').length,
+            modelMs: traceSteps.filter((item) => item.kind === 'llm').reduce((sum, item) => sum + item.durationMs, 0),
+            toolMs: traceSteps.filter((item) => item.kind === 'tool').reduce((sum, item) => sum + item.durationMs, 0),
+            contextMs: traceSteps.filter((item) => item.kind === 'context').reduce((sum, item) => sum + item.durationMs, 0),
+            persistenceMs: 0,
+            slowestStep: null,
+            steps: traceSteps,
+          },
+          status: 'error',
+          errorType: error?.constructor?.name || 'Error',
+        });
+      }
       const temporary = isTransientGeminiError(error);
       res.status(temporary ? 503 : 500).json({
         error: error.message || "Failed to generate AI response",
@@ -1253,6 +1744,24 @@ ${activeWorkoutContext}
           ? "Der AI-Coach ist gerade vorübergehend ausgelastet. Bitte sende die Nachricht in einem Moment erneut."
           : "Der AI-Coach konnte die Anfrage nicht verarbeiten. Bitte prüfe die Serverkonfiguration.",
       });
+    }
+  });
+
+  app.patch('/api/ai/metrics/roundtrip', async (req, res) => {
+    const sqlUser = await getUserFromRequest(req);
+    if (!sqlUser) return res.status(401).json({ error: 'Authentication required' });
+    try {
+      await ensureAiMetricsTable();
+      const result = await createPool().query(
+        `UPDATE ai_request_metrics
+         SET round_trip_ms = $1
+         WHERE request_id = $2 AND user_id = $3`,
+        [Math.max(0, Number(req.body.roundTripMs) || 0), String(req.body.requestId || ''), sqlUser.id],
+      );
+      res.json({ updated: result.rowCount === 1 });
+    } catch (error: any) {
+      console.warn(`[observability] roundtrip update failed: ${error?.constructor?.name || 'Error'}`);
+      res.status(500).json({ updated: false });
     }
   });
 

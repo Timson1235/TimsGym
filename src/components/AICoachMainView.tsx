@@ -2,17 +2,21 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Sparkles, Send, Bot, User, Loader2, Dumbbell, 
   CheckCircle2, Play, ArrowRight, Zap, RefreshCw, History, LayoutDashboard,
-  FileText, Trash2, Brain, Plus, X, BookmarkCheck, Target
+  Trash2, Brain, Plus, X, Target, MessagesSquare
 } from 'lucide-react';
-import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage } from '../types';
+import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
 import {
   addPersonalMemoryApi,
-  clearAIChatHistory,
+  createAIChatSession,
+  deleteAIChatSession,
   fetchAIChatHistory,
+  fetchAIChatSessions,
+  fetchAIUsageSummary,
   removePersonalMemoryApi,
   sendAIChatMessage,
 } from '../lib/api';
 import { ChatMarkdown } from './ChatMarkdown';
+import { AITraceDetails } from './AITraceDetails';
 import {
   AIUsageMeter,
   EMPTY_AI_USAGE,
@@ -76,6 +80,9 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
   const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
   const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
+  const [accountUsage, setAccountUsage] = useState<AIUsageSummary | null>(null);
+  const [chatSessions, setChatSessions] = useState<AIChatSession[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string>('');
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
 
@@ -110,18 +117,44 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     }
   };
 
+  const loadThread = async (threadId: string) => {
+    const history = await fetchAIChatHistory(threadId);
+    setMessages([DEFAULT_WELCOME_MSG, ...history]);
+    setActiveThreadId(threadId);
+    localStorage.setItem('active_ai_thread_id', threadId);
+    setLastAction(null);
+    setProposedWorkout(null);
+    setSessionUsage(EMPTY_AI_USAGE);
+  };
+
+  const refreshSessions = async () => {
+    const sessions = await fetchAIChatSessions();
+    setChatSessions(sessions);
+    return sessions as AIChatSession[];
+  };
+
   useEffect(() => {
     let cancelled = false;
-    fetchAIChatHistory()
-      .then((history) => {
-        if (!cancelled && history.length > 0) {
+    fetchAIChatSessions()
+      .then(async (sessions: AIChatSession[]) => {
+        if (cancelled || sessions.length === 0) return;
+        setChatSessions(sessions);
+        const saved = localStorage.getItem('active_ai_thread_id');
+        const selected = sessions.find((item) => item.id === saved) || sessions[0];
+        const history = await fetchAIChatHistory(selected.id);
+        if (!cancelled) {
+          setActiveThreadId(selected.id);
           setMessages([DEFAULT_WELCOME_MSG, ...history]);
         }
       })
-      .catch((error) => console.error('Failed to load chat history:', error));
-    return () => {
-      cancelled = true;
-    };
+      .catch((error) => console.error('Failed to load chat sessions:', error));
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    fetchAIUsageSummary()
+      .then(setAccountUsage)
+      .catch((error) => console.error('Failed to load account AI usage:', error));
   }, []);
 
   // Scroll only the chat container internally to prevent page jump on mobile
@@ -160,7 +193,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setIsLoading(true);
 
     try {
-      const response = await sendAIChatMessage(text, activeWorkout);
+      const response = await sendAIChatMessage(text, activeWorkout, activeThreadId);
 
       if (response.usage) {
         setSessionUsage((current) => mergeAIUsage(current, response.usage));
@@ -185,9 +218,19 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         toolsUsed: response.toolsUsed,
         usage: response.usage,
+        trace: response.trace,
       };
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      if (response.historyCompacted && activeThreadId) {
+        const activeHistory = await fetchAIChatHistory(activeThreadId);
+        setMessages([DEFAULT_WELCOME_MSG, ...activeHistory]);
+      } else {
+        setMessages((prev) => [...prev, assistantMsg]);
+      }
+      await refreshSessions();
+      fetchAIUsageSummary()
+        .then(setAccountUsage)
+        .catch((error) => console.error('Failed to refresh account AI usage:', error));
     } catch (error) {
       console.error('Failed to communicate with AI Coach:', error);
       const errorMsg: AIChatMessage = {
@@ -202,41 +245,30 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     }
   };
 
-  const handleSummariseChat = async () => {
-    if (messages.length <= 1 || isLoading) return;
-
-    setIsLoading(true);
+  const handleNewChat = async () => {
     try {
-      const summaryPrompt = "Summarise our conversation so far into 3-4 bullet points of key workouts, PRs logged, and actionable recommendations for my next session.";
-      const response = await sendAIChatMessage(summaryPrompt, activeWorkout);
-
-      if (response.usage) {
-        setSessionUsage((current) => mergeAIUsage(current, response.usage));
-      }
-
-      const summaryMsg: AIChatMessage = {
-        id: `msg_summary_${Date.now()}`,
-        role: 'assistant',
-        content: `📋 **Conversation Summary**:\n\n${response.reply || 'Summary complete.'}`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        usage: response.usage,
-      };
-
-      const freshMessages = [DEFAULT_WELCOME_MSG, summaryMsg];
-      setMessages(freshMessages);
+      const created = await createAIChatSession();
+      await refreshSessions();
+      await loadThread(created.id);
     } catch (error) {
-      console.error('Failed to summarize chat:', error);
-    } finally {
-      setIsLoading(false);
+      console.error('Failed to create chat session:', error);
     }
   };
 
-  const handleClearChat = async () => {
+  const handleDeleteChat = async () => {
+    if (!activeThreadId) return;
     try {
-      await clearAIChatHistory();
-      setMessages([DEFAULT_WELCOME_MSG]);
+      await deleteAIChatSession(activeThreadId);
+      let sessions = await refreshSessions();
+      if (sessions.length === 0) {
+        const created = await createAIChatSession();
+        sessions = await refreshSessions();
+        await loadThread(created.id);
+      } else {
+        await loadThread(sessions[0].id);
+      }
     } catch (error) {
-      console.error('Failed to clear chat history:', error);
+      console.error('Failed to delete chat session:', error);
     }
   };
 
@@ -278,29 +310,37 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                   GymPulse AI
                 </h3>
-                <AIUsageMeter usage={sessionUsage} />
+                <AIUsageMeter usage={sessionUsage} summary={accountUsage} />
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSummariseChat}
-                disabled={messages.length <= 1 || isLoading}
-                className="px-2.5 py-1.5 rounded-lg bg-teal-50 border border-teal-200/80 hover:bg-teal-100 disabled:opacity-40 text-teal-800 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors"
-                title="Summarise chat into key takeaways and clear old history"
+            <div className="flex items-center gap-1.5 min-w-0">
+              <MessagesSquare className="h-3.5 w-3.5 text-slate-400 hidden sm:block" />
+              <select
+                value={activeThreadId}
+                onChange={(event) => loadThread(event.target.value)}
+                disabled={isLoading}
+                className="max-w-[130px] sm:max-w-[190px] bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:border-teal-600"
+                title="Chat wechseln"
               >
-                <FileText className="h-3.5 w-3.5 text-teal-600" />
-                <span>Summarise</span>
+                {chatSessions.map((chat) => <option key={chat.id} value={chat.id}>{chat.title}</option>)}
+              </select>
+              <button
+                onClick={handleNewChat}
+                disabled={isLoading}
+                className="p-1.5 rounded-lg bg-teal-50 border border-teal-200 hover:bg-teal-100 disabled:opacity-40 text-teal-800 transition-colors"
+                title="Neuer Chat"
+              >
+                <Plus className="h-3.5 w-3.5" />
               </button>
 
               <button
-                onClick={handleClearChat}
-                disabled={messages.length <= 1 || isLoading}
-                className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 disabled:opacity-40 text-slate-600 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors"
-                title="Clear / Delete Chat History"
+                onClick={handleDeleteChat}
+                disabled={!activeThreadId || isLoading}
+                className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 disabled:opacity-40 text-slate-600 transition-colors"
+                title="Diesen Chat löschen"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Delete</span>
               </button>
             </div>
           </div>
@@ -349,6 +389,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     <div className="mt-1 text-[9px] font-mono text-slate-400">
                       {formatAIUsage(msg.usage)}
                     </div>
+                  )}
+
+                  {msg.role === 'assistant' && msg.trace && (
+                    <AITraceDetails trace={msg.trace} />
                   )}
 
                   <span className={`block text-[9px] font-mono mt-1 text-right ${msg.role === 'user' ? 'text-teal-100' : 'text-slate-400'}`}>

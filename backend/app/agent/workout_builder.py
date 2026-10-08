@@ -1,5 +1,7 @@
 import time
 
+from .exercise_identity import resolve_exercise
+
 
 def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -> dict:
     planned_exercises = args.get("exercises") or []
@@ -14,10 +16,10 @@ def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -
         if not name or not planned_sets:
             raise ValueError("Every workout exercise requires a name and explicit sets")
 
-        match = next(
-            (exercise for exercise in db["exercises"] if exercise["name"].lower() == name.lower()),
-            None,
-        )
+        match, candidates = resolve_exercise(db["exercises"], name)
+        if not match:
+            detail = ", ".join(item["name"] for item in candidates[:5]) if candidates else "no library match"
+            raise ValueError(f'Exercise "{name}" is not canonical ({detail})')
         workout_sets = []
         for set_index, planned_set in enumerate(planned_sets, start=1):
             rir = planned_set.get("rir")
@@ -34,9 +36,9 @@ def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -
 
         session_exercises.append({
             "id": f"we_{timestamp}_{exercise_index}",
-            "exerciseId": match["id"] if match else f"ex_temp_{exercise_index}",
-            "exerciseName": match["name"] if match else name,
-            "category": match["category"] if match else "Other",
+            "exerciseId": match["id"],
+            "exerciseName": match["name"],
+            "category": match["category"],
             "sets": workout_sets,
             "notes": planned.get("notes"),
         })

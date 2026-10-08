@@ -1,6 +1,6 @@
 import React from 'react';
-import { LineChart as ChartIcon, Trophy, Flame, Zap, BarChart2, Calendar, Target } from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
+import { Zap, BarChart2, Calendar, Target, TrendingUp } from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { DatabaseState } from '../types';
 import { formatDateString } from '../lib/utils';
 
@@ -46,6 +46,45 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
   const avgDuration = completedWorkouts.length
     ? Math.round(completedWorkouts.reduce((acc, w) => acc + w.durationMinutes, 0) / completedWorkouts.length)
     : 0;
+
+  const exerciseOptions = exercises
+    .map((exercise) => ({
+      exercise,
+      workoutCount: completedWorkouts.filter((workout) => workout.exercises.some(
+        (entry) => entry.exerciseId === exercise.id || entry.exerciseName.toLowerCase() === exercise.name.toLowerCase(),
+      )).length,
+    }))
+    .filter((item) => item.workoutCount > 0)
+    .sort((a, b) => b.workoutCount - a.workoutCount || a.exercise.name.localeCompare(b.exercise.name))
+    .map((item) => item.exercise);
+  const [selectedExerciseId, setSelectedExerciseId] = React.useState<string>('');
+  const selectedExercise = exerciseOptions.find((exercise) => exercise.id === selectedExerciseId) || exerciseOptions[0];
+
+  const exerciseProgress = selectedExercise ? completedWorkouts.flatMap((workout) => {
+    const entry = workout.exercises.find((item) => (
+      item.exerciseId === selectedExercise.id
+      || item.exerciseName.toLowerCase() === selectedExercise.name.toLowerCase()
+    ));
+    if (!entry) return [];
+    const validSets = entry.sets.filter((set) => set.completed && set.weight > 0 && set.reps > 0);
+    if (validSets.length === 0) return [];
+    const heaviest = validSets.reduce((best, set) => (
+      set.weight > best.weight || (set.weight === best.weight && set.reps > best.reps) ? set : best
+    ));
+    return [{
+      date: workout.date.split('-').slice(1).join('/'),
+      fullDate: formatDateString(workout.date),
+      weight: heaviest.weight,
+      reps: heaviest.reps,
+      title: workout.title,
+    }];
+  }) : [];
+
+  const repColor = (reps: number) => {
+    if (reps <= 4) return '#eab308';
+    if (reps <= 8) return '#0d9488';
+    return '#2563eb';
+  };
 
   return (
     <div className="space-y-6 font-sans">
@@ -97,6 +136,66 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
       </div>
 
       {/* Grid: Charts */}
+      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-teal-600" />
+            Exercise Progression
+          </h3>
+          <select
+            value={selectedExercise?.id || ''}
+            onChange={(event) => setSelectedExerciseId(event.target.value)}
+            className="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none focus:border-teal-600"
+            aria-label="Select exercise progression"
+          >
+            {exerciseOptions.map((exercise) => (
+              <option key={exercise.id} value={exercise.id}>{exercise.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {exerciseProgress.length > 0 ? (
+          <>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={exerciseProgress} margin={{ top: 14, right: 18, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" stroke="#64748b" fontSize={11} />
+                  <YAxis stroke="#64748b" fontSize={11} unit={` ${unit}`} domain={['dataMin - 5', 'dataMax + 5']} />
+                  <Tooltip
+                    formatter={(value, name, item) => [
+                      `${value} ${unit} × ${item.payload.reps} reps`,
+                      'Heaviest set',
+                    ]}
+                    labelFormatter={(_, payload) => payload[0]?.payload.fullDate || ''}
+                    contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '8px', color: '#0f172a' }}
+                  />
+                  <Bar
+                    dataKey="weight"
+                    name="Max weight"
+                    radius={[5, 5, 0, 0]}
+                    maxBarSize={64}
+                  >
+                    {exerciseProgress.map((point) => (
+                      <Cell key={`${point.fullDate}-${point.weight}-${point.reps}`} fill={repColor(point.reps)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-4 text-[10px] font-semibold text-slate-500">
+              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-yellow-500" />1-4 reps</span>
+              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-teal-600" />5-8 reps</span>
+              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-blue-600" />9+ reps</span>
+            </div>
+          </>
+        ) : (
+          <div className="py-12 text-center text-slate-400 text-xs uppercase font-medium tracking-wider">
+            Log completed weighted sets to see exercise progression.
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Workout Volume Progression */}

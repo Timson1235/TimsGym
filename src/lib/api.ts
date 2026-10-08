@@ -133,13 +133,14 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
   }
 }
 
-export async function sendAIChatMessage(message: string, activeWorkoutState?: any) {
+export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string) {
+  const requestStarted = performance.now();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, activeWorkoutState }),
+      body: JSON.stringify({ message, activeWorkoutState, threadId }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -148,6 +149,20 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
         reply: payload.reply || `Der AI-Coach ist momentan nicht erreichbar (HTTP ${res.status}).`,
       };
     }
+    if (payload.trace) {
+      const roundTripMs = Math.round(performance.now() - requestStarted);
+      payload.trace.roundTripMs = roundTripMs;
+      if (headers.Authorization && payload.trace.requestId) {
+        void fetch('/api/ai/metrics/roundtrip', {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            requestId: payload.trace.requestId,
+            roundTripMs,
+          }),
+        }).catch((error) => console.warn('Failed to store AI roundtrip metric:', error));
+      }
+    }
     return payload;
   } catch (error: any) {
     console.error('AI Chat Error:', error);
@@ -155,9 +170,10 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
   }
 }
 
-export async function fetchAIChatHistory(): Promise<AIChatMessage[]> {
+export async function fetchAIChatHistory(threadId?: string): Promise<AIChatMessage[]> {
   const headers = await getAuthHeaders();
-  const res = await fetch('/api/ai/history', { headers });
+  const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
+  const res = await fetch(`/api/ai/history${query}`, { headers });
   if (!res.ok) throw new Error('Failed to fetch AI chat history');
   const data = await res.json();
   return (data.messages || []).map((message: any) => ({
@@ -170,10 +186,46 @@ export async function fetchAIChatHistory(): Promise<AIChatMessage[]> {
   }));
 }
 
-export async function clearAIChatHistory(): Promise<void> {
+export async function clearAIChatHistory(threadId?: string): Promise<void> {
   const headers = await getAuthHeaders();
-  const res = await fetch('/api/ai/history', { method: 'DELETE', headers });
+  const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
+  const res = await fetch(`/api/ai/history${query}`, { method: 'DELETE', headers });
   if (!res.ok) throw new Error('Failed to clear AI chat history');
+}
+
+export async function fetchAIChatSessions() {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/sessions', { headers });
+  if (!res.ok) throw new Error('Failed to fetch AI chat sessions');
+  const data = await res.json();
+  return data.sessions || [];
+}
+
+export async function createAIChatSession(title = 'New chat') {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/sessions', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error('Failed to create AI chat session');
+  return (await res.json()).session;
+}
+
+export async function deleteAIChatSession(threadId: string) {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/ai/sessions/${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!res.ok) throw new Error('Failed to delete AI chat session');
+}
+
+export async function fetchAIUsageSummary() {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/usage', { headers });
+  if (!res.ok) throw new Error('Failed to fetch AI usage summary');
+  return await res.json();
 }
 
 export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8) {

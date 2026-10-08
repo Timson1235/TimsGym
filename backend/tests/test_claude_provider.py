@@ -78,6 +78,10 @@ class ClaudeProviderTests(unittest.TestCase):
 
         self.assertEqual(result["text"], "Gelöscht und eingetragen.")
         self.assertEqual(result["usage"]["provider"], "claude")
+        self.assertEqual(
+            [step["name"] for step in result["traceSteps"]],
+            ["Claude round 1", "Claude round 2", "Claude round 3"],
+        )
         self.assertEqual(calls, [
             ("delete_workout", {"searchOrId": "empty restart"}, "tool_1"),
             ("log_workout", {"title": "Completed workout", "exercises": []}, "tool_2"),

@@ -11,6 +11,7 @@ from typing import Any, Optional
 from sqlmodel import Session
 
 from .. import crud
+from .exercise_identity import resolve_exercise
 from .workout_builder import build_workout_proposal
 
 
@@ -45,6 +46,34 @@ def calculate_suggested_weight(
 # ---- Gemini function declarations (OpenAPI-style schema dicts) ----
 
 TOOL_DECLARATIONS = [
+    {
+        "name": "save_personal_memory",
+        "description": "Persist a durable fitness preference, goal, constraint, injury note, or personal fact. Call this whenever the user explicitly asks to remember, save, or add something to memory. Store only the concise fact, not the surrounding command.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "memory": {
+                    "type": "STRING",
+                    "description": "Concise durable fact to remember, e.g. 'Prefers compound exercises'.",
+                },
+            },
+            "required": ["memory"],
+        },
+    },
+    {
+        "name": "remove_personal_memory",
+        "description": "Remove a saved personal memory when the user explicitly asks to forget or delete it.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "memoryTextOrIndex": {
+                    "type": "STRING",
+                    "description": "Distinctive text or keyword identifying the memory to remove.",
+                },
+            },
+            "required": ["memoryTextOrIndex"],
+        },
+    },
     {
         "name": "start_workout_session",
         "description": "Create the confirmation card for the latest fully agreed workout. Call only after the user explicitly confirms the text draft.",
@@ -141,7 +170,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "resolve_exercise",
-        "description": "Resolve an ambiguous or colloquial exercise name against the user's exercise library before logging.",
+        "description": "Resolve any colloquial exercise wording to the permanent canonical library name and ID before logging. Understands German/English aliases such as Kniebeuge/Barbell Back Squat and RDL/Romanian Deadlift.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -278,15 +307,18 @@ def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwarg
     }
 
     if active_workout_state and isinstance(active_workout_state.get("exercises"), list):
+        canonical, candidates = resolve_exercise(db["exercises"], ex_name)
+        if not canonical:
+            detail = ", ".join(item["name"] for item in candidates[:5]) if candidates else "no library match"
+            raise ValueError(f'Exercise "{ex_name}" is not canonical ({detail})')
         we = next((e for e in active_workout_state["exercises"]
-                   if e.get("exerciseName", "").lower() == ex_name.lower()), None)
+                   if e.get("exerciseId") == canonical["id"]), None)
         if not we:
-            match = next((e for e in db["exercises"] if e["name"].lower() == ex_name.lower()), None)
             we = {
                 "id": _now_id("we"),
-                "exerciseId": match["id"] if match else f"ex_live_{int(time.time()*1000)}",
-                "exerciseName": match["name"] if match else ex_name,
-                "category": match["category"] if match else "Other",
+                "exerciseId": canonical["id"],
+                "exerciseName": canonical["name"],
+                "category": canonical["category"],
                 "sets": [],
             }
             active_workout_state["exercises"].append(we)
@@ -424,17 +456,13 @@ def handle_get_session_summary(session: Session, user_id: int, db: dict, args: d
 
 
 def handle_resolve_exercise(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
-    query = (args.get("query") or "").strip().lower()
-    matches = [e for e in db.get("exercises", []) if query in e["name"].lower()]
-
-    exact = next((e for e in matches if e["name"].lower() == query), None)
-    if exact:
-        return {"status": "exact_match", "exerciseName": exact["name"], "id": exact["id"], "category": exact["category"]}
-    if len(matches) == 1:
-        return {"status": "exact_match", "exerciseName": matches[0]["name"], "id": matches[0]["id"], "category": matches[0]["category"]}
-    if len(matches) > 1:
-        return {"status": "ambiguous", "candidates": [m["name"] for m in matches[:5]], "message": "Multiple matches found. Clarify with user."}
-    return {"status": "not_found", "query": query, "message": "No matching exercise found."}
+    query = (args.get("query") or "").strip()
+    match, candidates = resolve_exercise(db.get("exercises", []), query)
+    if match:
+        return {"status": "resolved", "exerciseName": match["name"], "id": match["id"], "category": match["category"]}
+    if candidates:
+        return {"status": "ambiguous", "candidates": [m["name"] for m in candidates[:5]], "message": "Multiple matches found. Clarify with user."}
+    return {"status": "not_found", "query": query, "message": "No matching exercise. Add it to the library before logging."}
 
 
 def handle_open_flag(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
@@ -495,7 +523,14 @@ def handle_log_workout(session: Session, user_id: int, db: dict, args: dict, **k
     exercises_out = []
     total_volume = 0
     for ex_idx, ex_item in enumerate(args.get("exercises", [])):
-        match = next((e for e in db["exercises"] if e["name"].lower() == (ex_item.get("exerciseName") or "").lower()), None)
+        supplied_name = ex_item.get("exerciseName") or ""
+        match, candidates = resolve_exercise(db["exercises"], supplied_name)
+        if not match:
+            detail = ", ".join(item["name"] for item in candidates[:5]) if candidates else "no library match"
+            raise ValueError(
+                f'Exercise "{supplied_name}" is not canonical ({detail}). '
+                "Call resolve_exercise, or add_exercise if it is genuinely new, then retry log_workout."
+            )
         sets = []
         for s_idx, s in enumerate(ex_item.get("sets", [])):
             w, r = s.get("weight", 0) or 0, s.get("reps", 0) or 0
@@ -504,9 +539,9 @@ def handle_log_workout(session: Session, user_id: int, db: dict, args: dict, **k
                          "type": s.get("type", "working"), "weight": w, "reps": r,
                          "rpe": s.get("rpe", 8), "completed": True})
         exercises_out.append({"id": f"we_{int(time.time()*1000)}_{ex_idx}",
-                              "exerciseId": match["id"] if match else f"ex_dyn_{int(time.time()*1000)}_{ex_idx}",
-                              "exerciseName": ex_item.get("exerciseName", "Custom Movement"),
-                              "category": ex_item.get("category") or (match["category"] if match else "Chest"),
+                              "exerciseId": match["id"],
+                              "exerciseName": match["name"],
+                              "category": match["category"],
                               "sets": sets})
     new_workout = {
         "id": _now_id("wk"), "title": args.get("title", "Logged Session"),
