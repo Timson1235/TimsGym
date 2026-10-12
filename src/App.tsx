@@ -13,28 +13,32 @@ import { ActiveWorkout } from './components/ActiveWorkout';
 import { WorkoutHistory } from './components/WorkoutHistory';
 import { ExerciseLibrary } from './components/ExerciseLibrary';
 import { Analytics } from './components/Analytics';
-import { AICoachDrawer } from './components/AICoachDrawer';
 import { RestTimerModal } from './components/RestTimerModal';
 import { PRCelebrationModal } from './components/PRCelebrationModal';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { LoginScreen } from './components/LoginScreen';
 import { Loader2 } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+
+type AppTab = 'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics';
 
 export default function App() {
   const [db, setDb] = useState<DatabaseState | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [guestMode, setGuestMode] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics'>('ai-coach');
+  const [activeTab, setActiveTab] = useState<AppTab>('ai-coach');
 
   // Active Workout Session state
   const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
 
   // Modals state
-  const [isAICoachOpen, setIsAICoachOpen] = useState<boolean>(false);
   const [aiInitialPrompt, setAiInitialPrompt] = useState<string>('');
   
   const [restTimerSeconds, setRestTimerSeconds] = useState<number | null>(null);
   const [activePRCelebration, setActivePRCelebration] = useState<{ exerciseName: string; weight: number; reps: number } | null>(null);
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   // Listen to Auth State Changes and Sync Database
   useEffect(() => {
@@ -107,10 +111,13 @@ export default function App() {
   };
 
   const handleCancelWorkout = () => {
-    if (confirm('Discard current workout session?')) {
-      setActiveWorkout(null);
-      setActiveTab('ai-coach');
-    }
+    setIsDiscardDialogOpen(true);
+  };
+
+  const confirmCancelWorkout = () => {
+    setActiveWorkout(null);
+    setActiveTab('ai-coach');
+    setIsDiscardDialogOpen(false);
   };
 
   const handleDeleteWorkout = async (id: string) => {
@@ -154,8 +161,56 @@ export default function App() {
     setActiveTab('ai-coach');
   };
 
+  const contentTransition = reduceMotion
+    ? { duration: 0 }
+    : { type: 'spring' as const, stiffness: 340, damping: 34 };
+
+  const content = activeTab === 'ai-coach' ? (
+    <AICoachMainView
+      db={db}
+      activeWorkout={activeWorkout}
+      onUpdateDatabase={(updatedDb) => setDb(updatedDb)}
+      onStartWorkoutSession={(session) => {
+        setActiveWorkout(session);
+        setActiveTab('active-workout');
+      }}
+      onSelectTab={setActiveTab}
+      initialPrompt={aiInitialPrompt}
+    />
+  ) : activeTab === 'active-workout' ? (
+    activeWorkout ? (
+      <ActiveWorkout
+        db={db}
+        activeWorkout={activeWorkout}
+        onUpdateWorkout={setActiveWorkout}
+        onFinishWorkout={handleFinishWorkout}
+        onCancelWorkout={handleCancelWorkout}
+        onStartRestTimer={(secs) => setRestTimerSeconds(secs)}
+        onNewPR={(exerciseName, weight, reps) => setActivePRCelebration({ exerciseName, weight, reps })}
+      />
+    ) : (
+      <section className="mx-auto my-8 max-w-lg text-center">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+          <span className="text-xl" aria-hidden="true">+</span>
+        </div>
+        <h2 className="mt-4 text-xl font-semibold text-slate-900">Ready when you are</h2>
+        <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-600">Ask the coach to prepare a workout, or start a blank one and shape it as you go.</p>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <button onClick={() => setActiveTab('ai-coach')} className="min-h-10 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800">Ask the coach</button>
+          <button onClick={handleStartBlankWorkout} className="min-h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">Start a blank workout</button>
+        </div>
+      </section>
+    )
+  ) : activeTab === 'history' ? (
+    <WorkoutHistory db={db} onDeleteWorkout={handleDeleteWorkout} onRepeatWorkout={handleRepeatWorkout} />
+  ) : activeTab === 'exercises' ? (
+    <ExerciseLibrary db={db} onSaveExercise={handleSaveExercise} onAskAICoachAboutExercise={handleQuickAskAI} />
+  ) : (
+    <Analytics db={db} />
+  );
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-teal-100 selection:text-slate-900">
+    <div className="min-h-screen text-slate-800 selection:bg-teal-100 selection:text-slate-900">
       
       {/* Top Navbar */}
       <Navbar
@@ -171,78 +226,18 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-12">
-        {activeTab === 'ai-coach' && (
-          <AICoachMainView
-            db={db}
-            activeWorkout={activeWorkout}
-            onUpdateDatabase={(updatedDb) => setDb(updatedDb)}
-            onStartWorkoutSession={(session) => {
-              setActiveWorkout(session);
-              setActiveTab('active-workout');
-            }}
-            onSelectTab={setActiveTab}
-            initialPrompt={aiInitialPrompt}
-          />
-        )}
-
-        {activeTab === 'active-workout' && (
-          activeWorkout ? (
-            <ActiveWorkout
-              db={db}
-              activeWorkout={activeWorkout}
-              onUpdateWorkout={setActiveWorkout}
-              onFinishWorkout={handleFinishWorkout}
-              onCancelWorkout={handleCancelWorkout}
-              onStartRestTimer={(secs) => setRestTimerSeconds(secs)}
-              onNewPR={(exerciseName, weight, reps) => setActivePRCelebration({ exerciseName, weight, reps })}
-            />
-          ) : (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center max-w-lg mx-auto space-y-4 shadow-sm my-8">
-              <div className="h-14 w-14 bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl flex items-center justify-center mx-auto text-2xl">
-                🏋️‍♂️
-              </div>
-              <h2 className="text-xl font-bold text-slate-900">No Active Workout Session</h2>
-              <p className="text-xs text-slate-500">
-                Ask your AI Coach to start a workout or choose a template routine.
-              </p>
-              <div className="flex justify-center gap-3 pt-2">
-                <button
-                  onClick={() => setActiveTab('ai-coach')}
-                  className="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs uppercase tracking-wider shadow-xs transition-all"
-                >
-                  Ask AI Coach
-                </button>
-                <button
-                  onClick={handleStartBlankWorkout}
-                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 font-semibold text-xs uppercase tracking-wider transition-all"
-                >
-                  Start Blank Workout
-                </button>
-              </div>
-            </div>
-          )
-        )}
-
-        {activeTab === 'history' && (
-          <WorkoutHistory
-            db={db}
-            onDeleteWorkout={handleDeleteWorkout}
-            onRepeatWorkout={handleRepeatWorkout}
-          />
-        )}
-
-        {activeTab === 'exercises' && (
-          <ExerciseLibrary
-            db={db}
-            onSaveExercise={handleSaveExercise}
-            onAskAICoachAboutExercise={handleQuickAskAI}
-          />
-        )}
-
-        {activeTab === 'analytics' && (
-          <Analytics db={db} />
-        )}
+      <main className="mx-auto max-w-7xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 md:pb-12 lg:px-8">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5 }}
+            transition={contentTransition}
+          >
+            {content}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       {/* Floating Rest Timer Modal */}
@@ -263,6 +258,15 @@ export default function App() {
           onClose={() => setActivePRCelebration(null)}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={isDiscardDialogOpen}
+        title="Discard this workout?"
+        description="Your unfinished sets will be removed. Completed workouts in your history are not affected."
+        confirmLabel="Discard workout"
+        onConfirm={confirmCancelWorkout}
+        onClose={() => setIsDiscardDialogOpen(false)}
+      />
 
     </div>
   );

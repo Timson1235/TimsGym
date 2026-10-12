@@ -108,18 +108,18 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight uppercase flex items-center gap-2.5">
+          <h2 className="flex items-center gap-2.5 text-2xl font-semibold text-slate-900">
             <Dumbbell className="h-6 w-6 text-teal-700" />
             Exercises & PR Ledger
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="mt-1 text-sm text-slate-600">
             Browse exercise library, track estimated 1RM progression, and add custom movements.
           </p>
         </div>
 
         <button
           onClick={() => setIsCustomModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs uppercase tracking-wider shadow-xs transition-all"
+          className="flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
         >
           <Plus className="h-4 w-4 stroke-[2.5]" />
           Create Custom Exercise
@@ -127,7 +127,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       </div>
 
       {/* Search & Category Filter */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-3">
+      <div className="app-surface space-y-3 p-4">
         <div className="relative">
           <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
           <input
@@ -135,7 +135,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search exercises by name..."
-            className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:border-teal-600 focus:bg-white transition-colors"
+            className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm text-slate-800"
           />
         </div>
 
@@ -144,7 +144,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider whitespace-nowrap transition-colors ${
+              className={`min-h-9 rounded-lg px-3 text-sm font-medium whitespace-nowrap ${
                 selectedCategory === cat
                   ? 'bg-teal-700 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-200/60'
@@ -162,14 +162,14 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
           <div
             key={ex.id}
             onClick={() => setInspectingExercise(ex)}
-            className="bg-white border border-slate-200/80 hover:border-teal-300 rounded-2xl p-5 cursor-pointer shadow-xs hover:shadow-md transition-all space-y-3 group"
+            className="app-surface group cursor-pointer space-y-3 p-5 hover:border-teal-300 hover:shadow-sm"
           >
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h3 className="font-bold text-slate-900 text-base uppercase tracking-tight group-hover:text-teal-700 transition-colors">
+                <h3 className="text-base font-semibold text-slate-900 group-hover:text-teal-700">
                   {ex.name}
                 </h3>
-                <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">
+                <p className="mt-0.5 text-xs text-slate-500">
                   {ex.category} • {ex.equipment}
                 </p>
               </div>
@@ -185,17 +185,17 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Trophy className="h-4 w-4 text-teal-600" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-teal-800">PR Record</span>
+                  <span className="text-sm font-semibold text-teal-800">PR record</span>
                 </div>
                 <div className="text-right text-xs font-mono">
                   <span className="font-bold text-slate-900">
                     {ex.personalRecord.maxWeight} {unit} × {ex.personalRecord.maxReps}
                   </span>
-                  <p className="text-[10px] text-slate-500 uppercase">Est 1RM: {ex.personalRecord.calculatedOneRepMax} {unit}</p>
+                  <p className="text-xs text-slate-500">Est. 1RM: {ex.personalRecord.calculatedOneRepMax} {unit}</p>
                 </div>
               </div>
             ) : (
-              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-[10px] text-slate-400 uppercase font-semibold tracking-wider">
+              <div className="rounded-lg border border-slate-200/80 bg-slate-50 p-3 text-sm text-slate-500">
                 No PR logged
               </div>
             )}
@@ -208,10 +208,10 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <form
             onSubmit={handleCreateCustom}
-            className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl"
+            className="app-surface max-w-md w-full space-y-4 p-6 shadow-xl"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900">Add Custom Exercise</h3>
+              <h3 className="text-lg font-semibold text-slate-900">Add custom exercise</h3>
               <button
                 type="button"
                 onClick={() => setIsCustomModalOpen(false)}
@@ -222,7 +222,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Exercise Name</label>
+              <label className="text-sm font-medium text-slate-700">Exercise name</label>
               <input
                 type="text"
                 required
@@ -269,7 +269,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Instructions / Form Cues</label>
+              <label className="text-sm font-medium text-slate-700">Instructions and form cues</label>
               <textarea
                 value={customInstructions}
                 onChange={(e) => setCustomInstructions(e.target.value)}
@@ -300,7 +300,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       {/* Exercise Inspector Drawer Modal */}
       {inspectingExercise && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-6 shadow-xl">
+          <div className="app-surface max-h-[90vh] max-w-2xl w-full space-y-6 overflow-y-auto p-6 shadow-xl sm:p-8">
             
             <div className="flex items-start justify-between border-b border-slate-200 pb-4">
               <div>
@@ -312,7 +312,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                     {inspectingExercise.equipment}
                   </span>
                 </div>
-                <h3 className="text-xl font-bold text-slate-900 uppercase tracking-tight mt-2">{inspectingExercise.name}</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-900">{inspectingExercise.name}</h3>
               </div>
 
               <div className="flex items-center gap-2">
@@ -322,7 +322,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                     setInspectingExercise(null);
                     onAskAICoachAboutExercise(`How much weight did I do last time on ${name} and how much should I do today?`);
                   }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs uppercase tracking-wider shadow-xs"
+                  className="flex min-h-10 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   Ask AI
@@ -340,7 +340,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             {/* Instructions */}
             {inspectingExercise.instructions && (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-700 space-y-1">
-                <p className="font-bold uppercase tracking-wider text-teal-800 text-[10px]">Form Cues & Instructions:</p>
+                <p className="text-sm font-semibold text-teal-800">Form cues and instructions</p>
                 <p className="leading-relaxed">{inspectingExercise.instructions}</p>
               </div>
             )}
@@ -349,13 +349,13 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             {inspectingExercise.personalRecord && (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">All-Time Personal Record</p>
+                  <p className="app-eyebrow">All-time personal record</p>
                   <p className="text-xl font-mono font-bold text-teal-800 mt-0.5">
                     {inspectingExercise.personalRecord.maxWeight} {unit} × {inspectingExercise.personalRecord.maxReps} reps
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Est. 1RM</p>
+                  <p className="app-eyebrow">Estimated 1RM</p>
                   <p className="text-base font-mono font-bold text-slate-900">
                     {inspectingExercise.personalRecord.calculatedOneRepMax} {unit}
                   </p>
@@ -365,7 +365,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
 
             {/* 1RM Progression Line Chart */}
             <div className="space-y-3">
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
                 <ChartIcon className="h-4 w-4 text-teal-600" />
                 1RM Progression Chart ({unit})
               </h4>

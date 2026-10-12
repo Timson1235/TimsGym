@@ -91,61 +91,61 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
       
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight uppercase flex items-center gap-2.5">
+        <h2 className="flex items-center gap-2.5 text-2xl font-semibold text-slate-900">
           <BarChart2 className="h-6 w-6 text-teal-700" />
           Analytics & Volume Ledger
         </h2>
-        <p className="text-xs text-slate-500 mt-1">
+        <p className="mt-1 text-sm text-slate-600">
           Detailed metrics, progressive overload tracking, and muscle group volume distribution.
         </p>
       </div>
 
       {/* Metric Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-center gap-4">
+        <div className="app-surface flex items-center gap-4 p-5">
           <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
             <Zap className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Lifetime Volume</p>
+            <p className="app-eyebrow">Total lifetime volume</p>
             <p className="text-2xl font-mono font-bold text-slate-900 mt-0.5">
               {totalVolume.toLocaleString()} <span className="text-xs font-normal text-teal-800">{unit}</span>
             </p>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-center gap-4">
+        <div className="app-surface flex items-center gap-4 p-5">
           <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
             <Target className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Completed Sets</p>
+            <p className="app-eyebrow">Completed sets</p>
             <p className="text-2xl font-mono font-bold text-slate-900 mt-0.5">{totalSetsCompleted} <span className="text-xs font-normal text-slate-500">sets</span></p>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-center gap-4">
+        <div className="app-surface flex items-center gap-4 p-5">
           <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
             <Calendar className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Avg Session Duration</p>
+            <p className="app-eyebrow">Average session duration</p>
             <p className="text-2xl font-mono font-bold text-slate-900 mt-0.5">{avgDuration} <span className="text-xs font-normal text-slate-500">mins</span></p>
           </div>
         </div>
       </div>
 
       {/* Grid: Charts */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+      <section className="app-surface space-y-4 p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
             <TrendingUp className="h-4 w-4 text-teal-600" />
             Exercise Progression
           </h3>
           <select
             value={selectedExercise?.id || ''}
             onChange={(event) => setSelectedExerciseId(event.target.value)}
-            className="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none focus:border-teal-600"
+            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 sm:w-64"
             aria-label="Select exercise progression"
           >
             {exerciseOptions.map((exercise) => (
@@ -183,24 +183,24 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex flex-wrap gap-4 text-[10px] font-semibold text-slate-500">
+            <div className="flex flex-wrap gap-4 text-xs font-medium text-slate-600">
               <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-yellow-500" />1-4 reps</span>
               <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-teal-600" />5-8 reps</span>
               <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-blue-600" />9+ reps</span>
             </div>
           </>
         ) : (
-          <div className="py-12 text-center text-slate-400 text-xs uppercase font-medium tracking-wider">
+          <div className="py-12 text-center text-sm text-slate-500">
             Log completed weighted sets to see exercise progression.
           </div>
         )}
-      </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Workout Volume Progression */}
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+        <section className="app-surface space-y-4 p-5">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
             <BarChart2 className="h-4 w-4 text-teal-600" />
             Workout Volume History ({unit})
           </h3>
@@ -220,15 +220,15 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="py-12 text-center text-slate-400 text-xs uppercase font-medium tracking-wider">
+            <div className="py-12 text-center text-sm text-slate-500">
               Log workouts to visualize volume trends over time.
             </div>
           )}
-        </div>
+        </section>
 
         {/* Muscle Group Distribution */}
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+        <section className="app-surface space-y-4 p-5">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
             <Target className="h-4 w-4 text-teal-600" />
             Sets Completed by Muscle Category
           </h3>
@@ -248,11 +248,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="py-12 text-center text-slate-400 text-xs uppercase font-medium tracking-wider">
+            <div className="py-12 text-center text-sm text-slate-500">
               Log sets to see muscle distribution analysis.
             </div>
           )}
-        </div>
+        </section>
 
       </div>
 

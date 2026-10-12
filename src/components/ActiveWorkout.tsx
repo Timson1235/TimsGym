@@ -251,7 +251,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     <div className="space-y-6 font-sans">
       
       {/* Top Header Card */}
-      <div className="bg-white/95 border border-slate-200/80 rounded-2xl p-5 shadow-xs sticky top-20 z-20 backdrop-blur-md">
+      <div className="app-surface sticky top-20 z-20 bg-white/92 p-5 backdrop-blur-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           <div className="flex-1 space-y-2">
@@ -260,7 +260,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               value={activeWorkout.title}
               onChange={(e) => handleTitleChange(e.target.value)}
               placeholder="Workout Session Title (e.g. Push Day)"
-              className="text-xl md:text-2xl font-extrabold text-slate-900 uppercase tracking-tight bg-transparent border-b border-transparent hover:border-slate-300 focus:border-teal-600 focus:outline-none w-full py-1 transition-colors"
+              className="w-full border-b border-transparent bg-transparent py-1 text-xl font-semibold text-slate-900 hover:border-slate-300 focus:border-teal-600 md:text-2xl"
             />
             
             <div className="flex flex-wrap items-center gap-2.5 text-xs font-semibold">
@@ -269,7 +269,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                 <span>{formatTimer(elapsedSeconds)}</span>
               </span>
 
-              <span className="bg-slate-100 px-3 py-1 rounded-full border border-slate-200 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
+              <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
                 {activeWorkout.exercises.length} Exercises
               </span>
 
@@ -282,14 +282,14 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
           <div className="flex items-center gap-2.5">
             <button
               onClick={onCancelWorkout}
-              className="px-4 py-2.5 rounded-xl border border-slate-200 text-rose-600 hover:bg-rose-50 text-xs font-bold uppercase tracking-wider transition-colors"
+              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-rose-700 hover:bg-rose-50"
             >
               Discard
             </button>
 
             <button
               onClick={handleFinish}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs uppercase tracking-wider shadow-xs transition-all"
+              className="flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-5 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
             >
               <Check className="h-4 w-4 stroke-[2.5]" />
               Finish Session
@@ -307,7 +307,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
           return (
             <div
               key={we.id}
-              className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4 relative overflow-hidden"
+              className="app-surface relative space-y-4 overflow-hidden p-5"
             >
               
               {/* Exercise Header */}
@@ -317,7 +317,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                     #{exIdx + 1}
                   </span>
                   <div>
-                    <h3 className="text-base font-bold text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                    <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
                       {we.exerciseName}
                       <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
                         {we.category}
@@ -330,7 +330,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                   <button
                     onClick={() => handleGetAISuggestion(we)}
                     disabled={loadingAiExerciseId === we.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                    className="flex min-h-9 items-center gap-1.5 rounded-lg bg-teal-50 px-3 text-sm font-medium text-teal-800 hover:bg-teal-100 disabled:opacity-50"
                   >
                     <Sparkles className="h-3.5 w-3.5 text-teal-600" />
                     <span>{loadingAiExerciseId === we.id ? 'Analyzing...' : 'AI Target'}</span>
@@ -349,7 +349,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
                   <button
                     onClick={() => handleRemoveExercise(we.id)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                    className="app-icon-button min-h-9 min-w-9 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -358,7 +358,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
               {/* Previous Performance Badge */}
               {lastPerf && (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="app-surface-subtle flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
                   <div className="flex items-center gap-2 text-slate-700">
                     <Info className="h-4 w-4 text-teal-600" />
                     <span className="font-bold text-slate-800">Last Session ({lastPerf.date}):</span>
@@ -499,7 +499,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               {/* Add Set Button */}
               <button
                 onClick={() => handleAddSet(we.id)}
-                className="w-full py-2 rounded-xl bg-slate-50 border border-dashed border-slate-200 hover:border-teal-400 hover:bg-teal-50/30 text-xs font-bold uppercase tracking-wider text-slate-600 hover:text-teal-800 transition-all flex items-center justify-center gap-1.5"
+                className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50 py-2 text-sm font-medium text-slate-600 hover:border-teal-400 hover:bg-teal-50/30 hover:text-teal-800"
               >
                 <Plus className="h-4 w-4" />
                 Add Set
@@ -512,12 +512,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         {/* Big Add Exercise Button */}
         <button
           onClick={() => setIsExerciseModalOpen(true)}
-          className="w-full py-5 rounded-2xl bg-white border-2 border-dashed border-slate-200 hover:border-teal-400 text-slate-600 hover:text-teal-800 transition-all shadow-xs flex flex-col items-center justify-center gap-2 group"
+          className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-200 bg-white py-5 text-slate-600 shadow-xs hover:border-teal-400 hover:text-teal-800 group"
         >
           <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center group-hover:scale-105 transition-transform">
             <Plus className="h-5 w-5 stroke-[2.5]" />
           </div>
-          <span className="font-bold text-xs uppercase tracking-wider">Add Exercise to Workout</span>
+          <span className="text-sm font-medium">Add exercise to workout</span>
         </button>
       </div>
 
