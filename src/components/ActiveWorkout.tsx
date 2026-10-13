@@ -1,3 +1,4 @@
+import { Dialog } from './Dialog';
 import React, { useState, useEffect } from 'react';
 import { 
   Play, Check, Plus, Trash2, Clock, Sparkles, AlertCircle, ChevronDown, 
@@ -251,21 +252,22 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     <div className="space-y-6 font-sans">
       
       {/* Top Header Card */}
-      <div className="app-surface sticky top-20 z-20 bg-white/92 p-5 backdrop-blur-xl">
+      <div className="app-workout-toolbar sticky top-16 z-20 bg-white/92 py-4 backdrop-blur-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           <div className="flex-1 space-y-2">
             <input
               type="text"
+              aria-label="Workout title"
               value={activeWorkout.title}
               onChange={(e) => handleTitleChange(e.target.value)}
               placeholder="Workout Session Title (e.g. Push Day)"
-              className="w-full border-b border-transparent bg-transparent py-1 text-xl font-semibold text-slate-900 hover:border-slate-300 focus:border-teal-600 md:text-2xl"
+              className="w-full border-b border-transparent bg-transparent py-1 text-xl font-semibold text-slate-900 hover:border-slate-300 focus:border-brand-600 md:text-2xl"
             />
             
             <div className="flex flex-wrap items-center gap-2.5 text-xs font-semibold">
-              <span className="flex items-center gap-1.5 text-teal-800 bg-teal-50 px-3 py-1 rounded-full border border-teal-200 text-[11px] font-mono font-bold">
-                <Clock className="h-3.5 w-3.5 text-teal-600" />
+              <span className="flex items-center gap-1.5 text-brand-800 bg-brand-50 px-3 py-1 rounded-full border border-brand-200 text-xs font-mono font-bold">
+                <Clock className="h-3.5 w-3.5 text-brand-600" />
                 <span>{formatTimer(elapsedSeconds)}</span>
               </span>
 
@@ -273,7 +275,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                 {activeWorkout.exercises.length} Exercises
               </span>
 
-              <span className="bg-slate-100 px-3 py-1 rounded-full border border-slate-200 text-slate-900 font-mono text-[11px] font-bold">
+              <span className="bg-slate-100 px-3 py-1 rounded-full border border-slate-200 text-slate-900 font-mono text-xs font-bold">
                 Volume: {calculateWorkoutVolume(activeWorkout).toLocaleString()} {unit}
               </span>
             </div>
@@ -289,7 +291,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
             <button
               onClick={handleFinish}
-              className="flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-5 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
+              className="app-primary flex min-h-10 items-center gap-2 rounded-lg px-5 text-sm font-semibold shadow-sm"
             >
               <Check className="h-4 w-4 stroke-[2.5]" />
               Finish Session
@@ -313,13 +315,13 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               {/* Exercise Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3.5">
                 <div className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-lg bg-teal-50 text-teal-700 font-mono font-bold text-xs flex items-center justify-center border border-teal-200">
+                  <span className="w-7 h-7 rounded-lg bg-brand-50 text-brand-700 font-mono font-bold text-xs flex items-center justify-center border border-brand-200">
                     #{exIdx + 1}
                   </span>
                   <div>
                     <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
                       {we.exerciseName}
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                      <span className="text-xs font-bold tracking-normal px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
                         {we.category}
                       </span>
                     </h3>
@@ -330,9 +332,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                   <button
                     onClick={() => handleGetAISuggestion(we)}
                     disabled={loadingAiExerciseId === we.id}
-                    className="flex min-h-9 items-center gap-1.5 rounded-lg bg-teal-50 px-3 text-sm font-medium text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                    className="flex min-h-9 items-center gap-1.5 rounded-lg bg-brand-50 px-3 text-sm font-medium text-brand-800 hover:bg-brand-100 disabled:opacity-50"
                   >
-                    <Sparkles className="h-3.5 w-3.5 text-teal-600" />
+                    <Sparkles className="h-3.5 w-3.5 text-brand-600" />
                     <span>{loadingAiExerciseId === we.id ? 'Analyzing...' : 'AI Target'}</span>
                   </button>
 
@@ -342,13 +344,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold transition-all"
                       title="Copy sets from last performance"
                     >
-                      <RotateCcw className="h-3.5 w-3.5 text-teal-600" />
+                      <RotateCcw className="h-3.5 w-3.5 text-brand-600" />
                       <span>Fill Previous</span>
                     </button>
                   )}
 
                   <button
                     onClick={() => handleRemoveExercise(we.id)}
+                    aria-label={`Remove ${we.exerciseName}`}
+                    title="Remove exercise"
                     className="app-icon-button min-h-9 min-w-9 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -358,15 +362,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
               {/* Previous Performance Badge */}
               {lastPerf && (
-                <div className="app-surface-subtle flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
-                  <div className="flex items-center gap-2 text-slate-700">
-                    <Info className="h-4 w-4 text-teal-600" />
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2 text-slate-700">
+                    <Info className="h-4 w-4 text-brand-600" />
                     <span className="font-bold text-slate-800">Last Session ({lastPerf.date}):</span>
-                    <span className="text-teal-800 font-mono font-bold">
+                    <span className="text-brand-800 font-mono font-bold">
                       {lastPerf.sets.map((s) => `${s.weight}${unit}×${s.reps}`).join(', ')}
                     </span>
                   </div>
-                  <span className="text-slate-500 text-[11px] font-mono">
+                  <span className="text-slate-500 text-xs font-mono">
                     Best: {lastPerf.maxWeight} {unit} × {lastPerf.maxReps} reps
                   </span>
                 </div>
@@ -374,132 +378,105 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
               {/* AI Suggestion Banner */}
               {aiSuggestions[we.id] && (
-                <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 text-xs text-teal-900 flex items-center gap-2 font-medium">
-                  <Sparkles className="h-4 w-4 text-teal-600 shrink-0" />
+                <div className="bg-brand-50 border border-brand-200 rounded-lg p-3 text-xs text-brand-900 flex items-center gap-2 font-medium">
+                  <Sparkles className="h-4 w-4 text-brand-600 shrink-0" />
                   <span>{aiSuggestions[we.id]}</span>
                 </div>
               )}
 
-              {/* Sets Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-400 uppercase font-bold tracking-wider text-[10px]">
-                      <th className="py-2 px-2 w-12">Set</th>
-                      <th className="py-2 px-2 w-28">Type</th>
-                      <th className="py-2 px-2 w-24">Last</th>
-                      <th className="py-2 px-2 w-28">{unit.toUpperCase()}</th>
-                      <th className="py-2 px-2 w-24">Reps</th>
-                      <th className="py-2 px-2 w-20">RPE</th>
-                      <th className="py-2 px-2 w-16 text-center">Done</th>
-                      <th className="py-2 px-2 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {we.sets.map((set, setIdx) => {
-                      const prevSet = lastPerf && lastPerf.sets[setIdx] ? lastPerf.sets[setIdx] : null;
+              {/* Focused set editor: each completed set remains visible, but every value is thumb-sized. */}
+              <div className="space-y-2">
+                {we.sets.map((set, setIdx) => {
+                  const prevSet = lastPerf && lastPerf.sets[setIdx] ? lastPerf.sets[setIdx] : null;
+                  return (
+                    <div
+                      key={set.id}
+                      className={`grid gap-3 border-b border-slate-200/80 py-3 last:border-b-0 sm:grid-cols-[2.5rem_8rem_minmax(0,1fr)_3rem] sm:items-center ${set.completed ? 'bg-emerald-50/45' : ''}`}
+                    >
+                      <div className="flex items-center gap-2 sm:block">
+                        <span className="app-eyebrow sm:block">Set</span>
+                        <span className="font-mono text-lg font-semibold text-slate-900">{set.setNumber}</span>
+                      </div>
 
-                      return (
-                        <tr
-                          key={set.id}
-                          className={`transition-colors ${
-                            set.completed ? 'bg-teal-50/50' : 'hover:bg-slate-50/50'
-                          }`}
+                      <label className="block">
+                        <span className="app-eyebrow mb-1 block">Type</span>
+                        <select
+                          value={set.type}
+                          onChange={(e) => handleUpdateSet(we.id, set.id, 'type', e.target.value as SetType)}
+                          className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-800"
                         >
-                          {/* Set Number */}
-                          <td className="py-2.5 px-2 font-mono font-bold text-slate-700">
-                            {set.setNumber}
-                          </td>
+                          <option value="working">Working</option>
+                          <option value="warmup">Warm-up</option>
+                          <option value="drop">Drop set</option>
+                          <option value="failure">Failure</option>
+                        </select>
+                      </label>
 
-                          {/* Set Type */}
-                          <td className="py-2.5 px-2">
-                            <select
-                              value={set.type}
-                              onChange={(e) => handleUpdateSet(we.id, set.id, 'type', e.target.value as SetType)}
-                              className="bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-teal-600"
-                            >
-                              <option value="working">Working</option>
-                              <option value="warmup">Warmup</option>
-                              <option value="drop">Drop</option>
-                              <option value="failure">Failure</option>
-                            </select>
-                          </td>
+                      <div className="grid grid-cols-3 gap-2">
+                        <label>
+                          <span className="app-eyebrow mb-1 block">{unit}</span>
+                          <input
+                            type="number"
+                            value={set.weight || ''}
+                            onChange={(e) => handleUpdateSet(we.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
+                            placeholder="0"
+                            className="h-12 w-full rounded-lg border border-slate-200 bg-white px-2 text-center font-mono text-lg font-semibold text-slate-900"
+                          />
+                        </label>
+                        <label>
+                          <span className="app-eyebrow mb-1 block">Reps</span>
+                          <input
+                            type="number"
+                            value={set.reps || ''}
+                            onChange={(e) => handleUpdateSet(we.id, set.id, 'reps', parseInt(e.target.value) || 0)}
+                            placeholder="0"
+                            className="h-12 w-full rounded-lg border border-slate-200 bg-white px-2 text-center font-mono text-lg font-semibold text-slate-900"
+                          />
+                        </label>
+                        <label>
+                          <span className="app-eyebrow mb-1 block">RPE</span>
+                          <input
+                            type="number"
+                            step="0.5"
+                            max="10"
+                            min="1"
+                            value={set.rpe || ''}
+                            onChange={(e) => handleUpdateSet(we.id, set.id, 'rpe', parseFloat(e.target.value) || undefined)}
+                            placeholder="8"
+                            className="h-12 w-full rounded-lg border border-slate-200 bg-white px-2 text-center font-mono text-base text-slate-700"
+                          />
+                        </label>
+                      </div>
 
-                          {/* Last Set Preview */}
-                          <td className="py-2.5 px-2 text-slate-400 font-mono">
-                            {prevSet ? `${prevSet.weight} × ${prevSet.reps}` : '-'}
-                          </td>
+                      <div className="flex items-end justify-end gap-1">
+                        <button
+                          onClick={() => handleUpdateSet(we.id, set.id, 'completed', !set.completed)}
+                          className={`inline-flex h-12 w-12 items-center justify-center rounded-lg ${set.completed ? 'app-primary shadow-sm' : 'border border-slate-200 bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                          aria-label={`Mark set ${set.setNumber} as ${set.completed ? 'not completed' : 'completed'}`}
+                        >
+                          <Check className="h-5 w-5 stroke-[2.5]" />
+                        </button>
+                        <button
+                          onClick={() => handleRemoveSet(we.id, set.id)}
+                          className="app-icon-button h-12 w-10 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                          aria-label={`Remove set ${set.setNumber}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
 
-                          {/* Weight Input */}
-                          <td className="py-2.5 px-2">
-                            <input
-                              type="number"
-                              value={set.weight || ''}
-                              onChange={(e) => handleUpdateSet(we.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
-                              placeholder="0"
-                              className="w-20 bg-slate-50 border border-slate-200 font-mono font-bold text-slate-900 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-teal-600 focus:bg-white text-center"
-                            />
-                          </td>
-
-                          {/* Reps Input */}
-                          <td className="py-2.5 px-2">
-                            <input
-                              type="number"
-                              value={set.reps || ''}
-                              onChange={(e) => handleUpdateSet(we.id, set.id, 'reps', parseInt(e.target.value) || 0)}
-                              placeholder="0"
-                              className="w-16 bg-slate-50 border border-slate-200 font-mono font-bold text-slate-900 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-teal-600 focus:bg-white text-center"
-                            />
-                          </td>
-
-                          {/* RPE Input */}
-                          <td className="py-2.5 px-2">
-                            <input
-                              type="number"
-                              step="0.5"
-                              max="10"
-                              min="1"
-                              value={set.rpe || ''}
-                              onChange={(e) => handleUpdateSet(we.id, set.id, 'rpe', parseFloat(e.target.value) || undefined)}
-                              placeholder="8"
-                              className="w-14 bg-slate-50 border border-slate-200 font-mono text-slate-700 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-teal-600 focus:bg-white text-center"
-                            />
-                          </td>
-
-                          {/* Completion Checkmark */}
-                          <td className="py-2.5 px-2 text-center">
-                            <button
-                              onClick={() => handleUpdateSet(we.id, set.id, 'completed', !set.completed)}
-                              className={`w-7 h-7 rounded-lg inline-flex items-center justify-center transition-all ${
-                                set.completed
-                                  ? 'bg-teal-700 text-white font-bold shadow-xs'
-                                  : 'bg-slate-100 border border-slate-200 text-slate-400 hover:text-slate-700'
-                              }`}
-                            >
-                              <Check className="h-4 w-4 stroke-[2.5]" />
-                            </button>
-                          </td>
-
-                          {/* Delete Set */}
-                          <td className="py-2.5 px-2">
-                            <button
-                              onClick={() => handleRemoveSet(we.id, set.id)}
-                              className="p-1 text-slate-300 hover:text-rose-600 transition-colors"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      {prevSet && (
+                        <p className="col-span-full text-xs text-slate-500 sm:col-start-3">Last time: <span className="font-mono text-slate-700">{prevSet.weight} {unit} × {prevSet.reps}</span></p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Add Set Button */}
               <button
                 onClick={() => handleAddSet(we.id)}
-                className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50 py-2 text-sm font-medium text-slate-600 hover:border-teal-400 hover:bg-teal-50/30 hover:text-teal-800"
+                className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 bg-slate-50 py-2 text-sm font-medium text-slate-600 hover:border-brand-400 hover:bg-brand-50/30 hover:text-brand-800"
               >
                 <Plus className="h-4 w-4" />
                 Add Set
@@ -512,9 +489,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         {/* Big Add Exercise Button */}
         <button
           onClick={() => setIsExerciseModalOpen(true)}
-          className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-200 bg-white py-5 text-slate-600 shadow-xs hover:border-teal-400 hover:text-teal-800 group"
+          className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-200 bg-white py-5 text-slate-600 shadow-xs hover:border-brand-400 hover:text-brand-800 group"
         >
-          <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center group-hover:scale-105 transition-transform">
+          <div className="w-9 h-9 rounded-lg bg-brand-50 text-brand-700 border border-brand-200 flex items-center justify-center group-hover:scale-105 transition-transform">
             <Plus className="h-5 w-5 stroke-[2.5]" />
           </div>
           <span className="text-sm font-medium">Add exercise to workout</span>
@@ -522,32 +499,16 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       </div>
 
       {/* Exercise Picker Modal */}
-      {isExerciseModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-xl w-full max-h-[85vh] flex flex-col shadow-xl overflow-hidden">
-            
-            {/* Modal Header */}
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-                <Dumbbell className="h-5 w-5 text-teal-700" />
-                Select Exercise
-              </h3>
-              <button
-                onClick={() => setIsExerciseModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700 text-xs font-bold uppercase tracking-wider"
-              >
-                ✕
-              </button>
-            </div>
-
+      <Dialog isOpen={isExerciseModalOpen} title="Select exercise" onClose={() => setIsExerciseModalOpen(false)} wide>
             {/* Search & Category Filter */}
             <div className="p-4 border-b border-slate-200 space-y-3 bg-slate-50">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="Search exercises"
                 placeholder="Search exercise name (e.g. Bench Press, Squat)..."
-                className="w-full bg-white border border-slate-200 text-slate-800 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-teal-600"
+                className="w-full bg-white border border-slate-200 text-slate-800 rounded-lg px-4 py-2.5 text-xs focus:outline-none focus:border-brand-600"
               />
 
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -555,9 +516,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1 rounded-lg text-xs font-bold tracking-normal whitespace-nowrap transition-colors ${
                       selectedCategory === cat
-                        ? 'bg-teal-700 text-white'
+                        ? 'bg-brand-700 text-white'
                         : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
                     }`}
                   >
@@ -570,7 +531,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             {/* Exercise List */}
             <div className="p-4 overflow-y-auto space-y-2 flex-1">
               {filteredExercises.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                <div className="text-center py-8 text-slate-400 text-xs font-bold tracking-normal">
                   No exercises found.
                 </div>
               ) : (
@@ -578,20 +539,23 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                   <div
                     key={ex.id}
                     onClick={() => handleAddExerciseToWorkout(ex)}
-                    className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/30 cursor-pointer transition-all flex items-center justify-between group"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleAddExerciseToWorkout(ex); } }}
+                    className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 hover:border-brand-300 hover:bg-brand-50/30 cursor-pointer transition-all flex items-center justify-between group"
                   >
                     <div>
-                      <h4 className="font-bold text-slate-900 text-sm group-hover:text-teal-800">
+                      <h4 className="font-bold text-slate-900 text-sm group-hover:text-brand-800">
                         {ex.name}
                       </h4>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider">
+                      <p className="text-xs text-slate-500 tracking-normal">
                         {ex.category} • {ex.equipment}
                       </p>
                     </div>
 
                     <div className="text-right font-mono">
                       {ex.personalRecord ? (
-                        <span className="text-xs font-bold text-teal-800">
+                        <span className="text-xs font-bold text-brand-800">
                           PR: {ex.personalRecord.maxWeight} {unit}
                         </span>
                       ) : (
@@ -603,9 +567,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               )}
             </div>
 
-          </div>
-        </div>
-      )}
+      </Dialog>
 
     </div>
   );

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Zap, BarChart2, Calendar, Target, TrendingUp } from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { ResponsiveContainer, BarChart, Bar, Cell, LabelList, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { DatabaseState } from '../types';
 import { formatDateString } from '../lib/utils';
 
@@ -11,6 +12,7 @@ interface AnalyticsProps {
 export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
   const { workouts, exercises, profile } = db;
   const unit = profile.preferredUnit;
+  const reduceMotion = useReducedMotion();
 
   const completedWorkouts = workouts
     .filter((w) => w.isCompleted)
@@ -81,9 +83,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
   }) : [];
 
   const repColor = (reps: number) => {
-    if (reps <= 4) return '#eab308';
-    if (reps <= 8) return '#0d9488';
-    return '#2563eb';
+    // One color per rep count, capped so unusually high-rep work remains legible.
+    const normalizedReps = Math.min(Math.max(reps, 1), 15);
+    const hue = 18 + ((normalizedReps - 1) / 14) * 192;
+    return `hsl(${hue} 68% 42%)`;
   };
 
   return (
@@ -92,7 +95,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
       {/* Header */}
       <div>
         <h2 className="flex items-center gap-2.5 text-2xl font-semibold text-slate-900">
-          <BarChart2 className="h-6 w-6 text-teal-700" />
+          <BarChart2 className="h-6 w-6 text-brand-700" />
           Analytics & Volume Ledger
         </h2>
         <p className="mt-1 text-sm text-slate-600">
@@ -101,21 +104,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
       </div>
 
       {/* Metric Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="app-surface flex items-center gap-4 p-5">
-          <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
+      <div className="app-metric-strip grid grid-cols-1 sm:grid-cols-3">
+        <div className="flex items-center gap-4 border-b border-slate-200/80 p-5 sm:border-b-0 sm:border-r">
+          <div className="h-11 w-11 rounded-lg bg-brand-50 text-brand-700 border border-brand-200 flex items-center justify-center shrink-0">
             <Zap className="h-5 w-5" />
           </div>
           <div>
             <p className="app-eyebrow">Total lifetime volume</p>
             <p className="text-2xl font-mono font-bold text-slate-900 mt-0.5">
-              {totalVolume.toLocaleString()} <span className="text-xs font-normal text-teal-800">{unit}</span>
+              {totalVolume.toLocaleString()} <span className="text-xs font-normal text-brand-800">{unit}</span>
             </p>
           </div>
         </div>
 
-        <div className="app-surface flex items-center gap-4 p-5">
-          <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
+        <div className="flex items-center gap-4 border-b border-slate-200/80 p-5 sm:border-b-0 sm:border-r">
+          <div className="h-11 w-11 rounded-lg bg-brand-50 text-brand-700 border border-brand-200 flex items-center justify-center shrink-0">
             <Target className="h-5 w-5" />
           </div>
           <div>
@@ -124,8 +127,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
           </div>
         </div>
 
-        <div className="app-surface flex items-center gap-4 p-5">
-          <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
+        <div className="flex items-center gap-4 p-5">
+          <div className="h-11 w-11 rounded-lg bg-brand-50 text-brand-700 border border-brand-200 flex items-center justify-center shrink-0">
             <Calendar className="h-5 w-5" />
           </div>
           <div>
@@ -136,10 +139,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
       </div>
 
       {/* Grid: Charts */}
-      <section className="app-surface space-y-4 p-5">
+      <section className="space-y-4 border-y border-slate-200/80 py-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <TrendingUp className="h-4 w-4 text-teal-600" />
+            <TrendingUp className="h-4 w-4 text-brand-600" />
             Exercise Progression
           </h3>
           <select
@@ -156,7 +159,15 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
 
         {exerciseProgress.length > 0 ? (
           <>
-            <div className="h-72 w-full">
+            <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={selectedExercise?.id || 'no-exercise'}
+              className="h-72 w-full"
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
+              transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
+            >
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={exerciseProgress} margin={{ top: 14, right: 18, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -171,23 +182,38 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
                     contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '8px', color: '#0f172a' }}
                   />
                   <Bar
+                    isAnimationActive={!reduceMotion}
+                    animationDuration={300}
                     dataKey="weight"
                     name="Max weight"
                     radius={[5, 5, 0, 0]}
                     maxBarSize={64}
                   >
+                    {exerciseProgress.length <= 16 && <LabelList dataKey="reps" position="top" formatter={(value) => `${value}r`} fill="#475569" fontSize={12} />}
                     {exerciseProgress.map((point) => (
                       <Cell key={`${point.fullDate}-${point.weight}-${point.reps}`} fill={repColor(point.reps)} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            </motion.div>
+            </AnimatePresence>
+            <div className="max-w-sm space-y-2 text-xs font-medium text-slate-600" aria-label="Bar color shows repetitions completed at the maximum weight">
+              <p>Reps at max weight</p>
+              <div className="h-3 rounded-sm" aria-hidden="true" style={{ background: `linear-gradient(90deg, ${Array.from({ length: 15 }, (_, i) => `${repColor(i + 1)} ${i / 14 * 100}%`).join(', ')})` }} />
+              <div className="relative mx-2 h-5">
+                {[1, 5, 6, 10, 15].map((reps) => <span key={reps} className="absolute -translate-x-1/2 tabular-nums" style={{ left: `${(reps - 1) / 14 * 100}%` }}>{reps === 15 ? '15+' : reps}</span>)}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-4 text-xs font-medium text-slate-600">
-              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-yellow-500" />1-4 reps</span>
-              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-teal-600" />5-8 reps</span>
-              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-blue-600" />9+ reps</span>
-            </div>
+            <details className="text-sm">
+              <summary className="cursor-pointer py-2 font-medium">Session values</summary>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left tabular-nums">
+                  <thead><tr className="border-b border-slate-300"><th className="py-2">Date</th><th>Max weight</th><th>Reps</th></tr></thead>
+                  <tbody>{exerciseProgress.map((point, i) => <tr key={i} className="border-b border-slate-200"><td className="py-2">{point.fullDate}</td><td>{point.weight} {unit}</td><td>{point.reps}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </details>
           </>
         ) : (
           <div className="py-12 text-center text-sm text-slate-500">
@@ -196,12 +222,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
         )}
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-0 border-b border-slate-200/80 lg:grid-cols-2">
         
         {/* Workout Volume Progression */}
-        <section className="app-surface space-y-4 p-5">
+        <section className="space-y-4 border-b border-slate-200/80 py-5 lg:border-b-0 lg:border-r lg:pr-6">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <BarChart2 className="h-4 w-4 text-teal-600" />
+            <BarChart2 className="h-4 w-4 text-brand-600" />
             Workout Volume History ({unit})
           </h3>
 
@@ -215,7 +241,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
                   <Tooltip
                     contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '12px', color: '#0f172a' }}
                   />
-                  <Bar dataKey="volume" name="Volume" fill="#0f766e" radius={[6, 6, 0, 0]} />
+                  <Bar isAnimationActive={!reduceMotion} animationDuration={300} dataKey="volume" name="Volume" fill="#2c6b46" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -227,9 +253,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
         </section>
 
         {/* Muscle Group Distribution */}
-        <section className="app-surface space-y-4 p-5">
+        <section className="space-y-4 py-5 lg:pl-6">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <Target className="h-4 w-4 text-teal-600" />
+            <Target className="h-4 w-4 text-brand-600" />
             Sets Completed by Muscle Category
           </h3>
 
@@ -243,7 +269,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ db }) => {
                   <Tooltip
                     contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '12px', color: '#0f172a' }}
                   />
-                  <Bar dataKey="sets" name="Sets" fill="#0d9488" radius={[0, 6, 6, 0]} />
+                  <Bar isAnimationActive={!reduceMotion} animationDuration={300} dataKey="sets" name="Sets" fill="#315fa8" radius={[0, 6, 6, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

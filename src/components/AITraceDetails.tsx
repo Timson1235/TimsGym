@@ -20,7 +20,7 @@ export const AITraceDetails: React.FC<{ trace: AITrace; dark?: boolean }> = ({
   return (
     <details className={`mt-2 border-t pt-1.5 ${dark ? 'border-slate-800' : 'border-slate-100'}`}>
       <summary
-        className={`cursor-pointer list-none flex items-center gap-1.5 text-[9px] font-mono ${
+        className={`cursor-pointer list-none flex items-center gap-1.5 text-xs font-mono ${
           dark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
         }`}
       >
@@ -36,24 +36,24 @@ export const AITraceDetails: React.FC<{ trace: AITrace; dark?: boolean }> = ({
         {trace.steps.map((step, index) => (
           <div key={`${step.kind}-${step.name}-${index}`} className="grid grid-cols-[minmax(0,1fr)_48px] gap-2 items-center">
             <div className="min-w-0">
-              <div className={`flex justify-between gap-2 text-[9px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+              <div className={`flex justify-between gap-2 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
                 <span className="truncate">{step.name}</span>
-                <span className="uppercase opacity-60">{step.kind}</span>
+                <span className="opacity-60">{step.kind}</span>
               </div>
               <div className={`mt-0.5 h-1 overflow-hidden ${dark ? 'bg-slate-800' : 'bg-slate-100'}`}>
                 <div
-                  className={step.kind === 'llm' ? 'h-full bg-teal-500' : 'h-full bg-amber-400'}
+                  className={step.kind === 'llm' ? 'h-full bg-brand-500' : 'h-full bg-amber-400'}
                   style={{ width: `${Math.max((step.durationMs / maxDuration) * 100, 2)}%` }}
                 />
               </div>
             </div>
-            <span className={`text-right text-[9px] font-mono ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+            <span className={`text-right text-xs font-mono ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
               {formatDuration(step.durationMs)}
             </span>
           </div>
         ))}
 
-        <div className={`pt-1 text-[9px] font-mono ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+        <div className={`pt-1 text-xs font-mono ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
           Modell {formatDuration(trace.modelMs)} · Tools {formatDuration(trace.toolMs)} · Server {formatDuration(trace.totalMs)}
           {trace.roundTripMs ? ` · Netzwerk/Overhead ${formatDuration(overheadMs)}` : ''}
         </div>

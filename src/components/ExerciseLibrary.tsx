@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useReducedMotion } from 'motion/react';
+import { Dialog } from './Dialog';
 import { Dumbbell, Plus, Search, Trophy, LineChart as ChartIcon, Info, Sparkles } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { DatabaseState, Exercise, MuscleCategory, EquipmentType } from '../types';
@@ -16,6 +18,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
   onAskAICoachAboutExercise,
 }) => {
   const { exercises, workouts, profile } = db;
+  const reduceMotion = useReducedMotion();
   const unit = profile.preferredUnit;
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -109,7 +112,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="flex items-center gap-2.5 text-2xl font-semibold text-slate-900">
-            <Dumbbell className="h-6 w-6 text-teal-700" />
+            <Dumbbell className="h-6 w-6 text-brand-700" />
             Exercises & PR Ledger
           </h2>
           <p className="mt-1 text-sm text-slate-600">
@@ -119,7 +122,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
 
         <button
           onClick={() => setIsCustomModalOpen(true)}
-          className="flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
+          className="flex min-h-10 items-center gap-2 rounded-lg bg-brand-700 px-4 text-sm font-semibold text-white shadow-xs hover:bg-brand-800"
         >
           <Plus className="h-4 w-4 stroke-[2.5]" />
           Create Custom Exercise
@@ -127,11 +130,12 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       </div>
 
       {/* Search & Category Filter */}
-      <div className="app-surface space-y-3 p-4">
+      <div className="space-y-3 border-y border-slate-200 py-4">
         <div className="relative">
           <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
           <input
             type="text"
+            aria-label="Search exercises"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search exercises by name..."
@@ -146,7 +150,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
               onClick={() => setSelectedCategory(cat)}
               className={`min-h-9 rounded-lg px-3 text-sm font-medium whitespace-nowrap ${
                 selectedCategory === cat
-                  ? 'bg-teal-700 text-white shadow-xs'
+                  ? 'bg-brand-700 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-200/60'
               }`}
             >
@@ -162,11 +166,15 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
           <div
             key={ex.id}
             onClick={() => setInspectingExercise(ex)}
-            className="app-surface group cursor-pointer space-y-3 p-5 hover:border-teal-300 hover:shadow-sm"
+            role="button"
+            tabIndex={0}
+            aria-label={`View ${ex.name}`}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setInspectingExercise(ex); } }}
+            className="app-surface group cursor-pointer space-y-3 p-5 hover:border-brand-300 hover:shadow-sm"
           >
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h3 className="text-base font-semibold text-slate-900 group-hover:text-teal-700">
+                <h3 className="text-base font-semibold text-slate-900 group-hover:text-brand-700">
                   {ex.name}
                 </h3>
                 <p className="mt-0.5 text-xs text-slate-500">
@@ -175,17 +183,17 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
               </div>
 
               {ex.isCustom && (
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-teal-50 text-teal-700 border border-teal-200/80">
+                <span className="text-xs font-bold tracking-normal px-2 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200/80">
                   Custom
                 </span>
               )}
             </div>
 
             {ex.personalRecord ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
+              <div className="border-t border-slate-200 pt-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-teal-600" />
-                  <span className="text-sm font-semibold text-teal-800">PR record</span>
+                  <Trophy className="h-4 w-4 text-brand-600" />
+                  <span className="text-sm font-semibold text-brand-800">PR record</span>
                 </div>
                 <div className="text-right text-xs font-mono">
                   <span className="font-bold text-slate-900">
@@ -195,7 +203,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="rounded-lg border border-slate-200/80 bg-slate-50 p-3 text-sm text-slate-500">
+              <div className="border-t border-slate-200 pt-3 text-sm text-slate-500">
                 No PR logged
               </div>
             )}
@@ -204,42 +212,32 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
       </div>
 
       {/* Custom Exercise Modal */}
-      {isCustomModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+      <Dialog isOpen={isCustomModalOpen} title="Add custom exercise" onClose={() => setIsCustomModalOpen(false)}>
           <form
             onSubmit={handleCreateCustom}
-            className="app-surface max-w-md w-full space-y-4 p-6 shadow-xl"
+            className="space-y-4"
           >
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900">Add custom exercise</h3>
-              <button
-                type="button"
-                onClick={() => setIsCustomModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700 font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-700">Exercise name</label>
               <input
+                aria-label="Exercise name"
                 type="text"
                 required
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
                 placeholder="e.g., Cable Crossover Low to High"
-                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-600 focus:bg-white"
+                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-3.5 py-2 text-xs focus:outline-none focus:border-brand-600 focus:bg-white"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Category</label>
+                <label className="text-xs font-bold tracking-normal text-slate-500">Category</label>
                 <select
+                  aria-label="Category"
                   value={customCategory}
                   onChange={(e) => setCustomCategory(e.target.value as MuscleCategory)}
-                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-teal-600"
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-brand-600"
                 >
                   <option value="Chest">Chest</option>
                   <option value="Back">Back</option>
@@ -252,11 +250,12 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Equipment</label>
+                <label className="text-xs font-bold tracking-normal text-slate-500">Equipment</label>
                 <select
+                  aria-label="Equipment"
                   value={customEquipment}
                   onChange={(e) => setCustomEquipment(e.target.value as EquipmentType)}
-                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-teal-600"
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-brand-600"
                 >
                   <option value="Barbell">Barbell</option>
                   <option value="Dumbbell">Dumbbell</option>
@@ -271,10 +270,11 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-700">Instructions and form cues</label>
               <textarea
+                aria-label="Instructions and form cues"
                 value={customInstructions}
                 onChange={(e) => setCustomInstructions(e.target.value)}
                 placeholder="Optional form cues or setup details..."
-                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-600 h-20"
+                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-3.5 py-2 text-xs focus:outline-none focus:border-brand-600 h-20"
               />
             </div>
 
@@ -282,33 +282,32 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
               <button
                 type="button"
                 onClick={() => setIsCustomModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-500 hover:text-slate-800"
+                className="px-4 py-2 rounded-lg text-xs font-bold tracking-normal text-slate-500 hover:text-slate-800"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs uppercase tracking-wider shadow-xs"
+                className="px-4 py-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-bold text-xs tracking-normal shadow-xs"
               >
                 Save Movement
               </button>
             </div>
           </form>
-        </div>
-      )}
+      </Dialog>
 
       {/* Exercise Inspector Drawer Modal */}
+      <Dialog isOpen={!!inspectingExercise} title={inspectingExercise?.name || "Exercise details"} onClose={() => setInspectingExercise(null)} wide>
       {inspectingExercise && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="app-surface max-h-[90vh] max-w-2xl w-full space-y-6 overflow-y-auto p-6 shadow-xl sm:p-8">
+          <div className="space-y-6">
             
-            <div className="flex items-start justify-between border-b border-slate-200 pb-4">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                  <span className="text-xs font-bold tracking-normal px-2.5 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">
                     {inspectingExercise.category}
                   </span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                  <span className="text-xs font-bold tracking-normal px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
                     {inspectingExercise.equipment}
                   </span>
                 </div>
@@ -322,35 +321,30 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                     setInspectingExercise(null);
                     onAskAICoachAboutExercise(`How much weight did I do last time on ${name} and how much should I do today?`);
                   }}
-                  className="flex min-h-10 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-sm font-semibold text-white shadow-xs hover:bg-teal-800"
+                  className="flex min-h-10 items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 text-sm font-semibold text-white shadow-xs hover:bg-brand-800"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   Ask AI
                 </button>
 
-                <button
-                  onClick={() => setInspectingExercise(null)}
-                  className="text-slate-400 hover:text-slate-700 text-xs font-bold uppercase tracking-wider p-2"
-                >
-                  ✕
-                </button>
+
               </div>
             </div>
 
             {/* Instructions */}
             {inspectingExercise.instructions && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-700 space-y-1">
-                <p className="text-sm font-semibold text-teal-800">Form cues and instructions</p>
+              <div className="border-t border-slate-200 pt-4 text-xs text-slate-700 space-y-1">
+                <p className="text-sm font-semibold text-brand-800">Form cues and instructions</p>
                 <p className="leading-relaxed">{inspectingExercise.instructions}</p>
               </div>
             )}
 
             {/* Personal Record Card */}
             {inspectingExercise.personalRecord && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-center justify-between">
                 <div>
                   <p className="app-eyebrow">All-time personal record</p>
-                  <p className="text-xl font-mono font-bold text-teal-800 mt-0.5">
+                  <p className="text-xl font-mono font-bold text-brand-800 mt-0.5">
                     {inspectingExercise.personalRecord.maxWeight} {unit} × {inspectingExercise.personalRecord.maxReps} reps
                   </p>
                 </div>
@@ -366,12 +360,12 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
             {/* 1RM Progression Line Chart */}
             <div className="space-y-3">
               <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-                <ChartIcon className="h-4 w-4 text-teal-600" />
+                <ChartIcon className="h-4 w-4 text-brand-600" />
                 1RM Progression Chart ({unit})
               </h4>
 
               {getExerciseChartData(inspectingExercise.id).length > 0 ? (
-                <div className="h-48 w-full bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <div className="h-48 w-full bg-slate-50 border border-slate-200 rounded-lg p-4">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={getExerciseChartData(inspectingExercise.id)}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -380,20 +374,20 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
                       <Tooltip
                         contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '12px', color: '#0f172a' }}
                       />
-                      <Line type="monotone" dataKey="oneRepMax" name="Est 1RM" stroke="#0f766e" strokeWidth={2.5} dot={{ r: 4 }} />
+                      <Line isAnimationActive={!reduceMotion} animationDuration={300} type="monotone" dataKey="oneRepMax" name="Est 1RM" stroke="#0f766e" strokeWidth={2.5} dot={{ r: 4 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center text-xs text-slate-400 uppercase font-semibold tracking-wider">
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 text-center text-xs text-slate-400 font-semibold tracking-normal">
                   Log sets for this exercise to generate progress graphs.
                 </div>
               )}
             </div>
 
           </div>
-        </div>
       )}
+      </Dialog>
 
     </div>
   );

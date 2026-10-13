@@ -16,6 +16,7 @@ import { Analytics } from './components/Analytics';
 import { RestTimerModal } from './components/RestTimerModal';
 import { PRCelebrationModal } from './components/PRCelebrationModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { SettingsDialog } from './components/SettingsDialog';
 import { LoginScreen } from './components/LoginScreen';
 import { Loader2 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
@@ -38,6 +39,7 @@ export default function App() {
   const [restTimerSeconds, setRestTimerSeconds] = useState<number | null>(null);
   const [activePRCelebration, setActivePRCelebration] = useState<{ exerciseName: string; weight: number; reps: number } | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const reduceMotion = useReducedMotion();
 
   // Listen to Auth State Changes and Sync Database
@@ -61,7 +63,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center justify-center space-y-3 font-sans">
-        <Loader2 className="h-8 w-8 text-teal-700 animate-spin" />
+        <Loader2 className="h-8 w-8 text-brand-700 animate-spin" />
         <p className="text-xs font-semibold text-slate-600">Lade TimsGym AI...</p>
       </div>
     );
@@ -75,7 +77,7 @@ export default function App() {
   if (!db) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center justify-center space-y-3 font-sans">
-        <Loader2 className="h-8 w-8 text-teal-700 animate-spin" />
+        <Loader2 className="h-8 w-8 text-brand-700 animate-spin" />
         <p className="text-xs font-semibold text-slate-600">Initialisiere Trainingsdatenbank...</p>
       </div>
     );
@@ -163,7 +165,7 @@ export default function App() {
 
   const contentTransition = reduceMotion
     ? { duration: 0 }
-    : { type: 'spring' as const, stiffness: 340, damping: 34 };
+    : { type: 'spring' as const, bounce: 0, duration: 0.3 };
 
   const content = activeTab === 'ai-coach' ? (
     <AICoachMainView
@@ -190,13 +192,13 @@ export default function App() {
       />
     ) : (
       <section className="mx-auto my-8 max-w-lg text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
           <span className="text-xl" aria-hidden="true">+</span>
         </div>
         <h2 className="mt-4 text-xl font-semibold text-slate-900">Ready when you are</h2>
         <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-600">Ask the coach to prepare a workout, or start a blank one and shape it as you go.</p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
-          <button onClick={() => setActiveTab('ai-coach')} className="min-h-10 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800">Ask the coach</button>
+          <button onClick={() => setActiveTab('ai-coach')} className="min-h-10 rounded-lg bg-brand-700 px-4 text-sm font-semibold text-white hover:bg-brand-800">Ask the coach</button>
           <button onClick={handleStartBlankWorkout} className="min-h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">Start a blank workout</button>
         </div>
       </section>
@@ -210,7 +212,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen text-slate-800 selection:bg-teal-100 selection:text-slate-900">
+    <div className="min-h-screen text-slate-800 selection:bg-brand-100 selection:text-slate-900">
       
       {/* Top Navbar */}
       <Navbar
@@ -223,16 +225,17 @@ export default function App() {
           setActiveTab('ai-coach');
         }}
         user={currentUser}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       {/* Main Content Area */}
       <main className="mx-auto max-w-7xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 md:pb-12 lg:px-8">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
             key={activeTab}
             initial={reduceMotion ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
             transition={contentTransition}
           >
             {content}
@@ -241,23 +244,27 @@ export default function App() {
       </main>
 
       {/* Floating Rest Timer Modal */}
+      <AnimatePresence>
       {restTimerSeconds !== null && (
         <RestTimerModal
+          key="rest-timer"
           initialSeconds={restTimerSeconds}
           onClose={() => setRestTimerSeconds(null)}
         />
       )}
+      </AnimatePresence>
 
       {/* Personal Record Celebration Confetti Modal */}
-      {activePRCelebration && (
-        <PRCelebrationModal
-          exerciseName={activePRCelebration.exerciseName}
-          weight={activePRCelebration.weight}
-          reps={activePRCelebration.reps}
+      <PRCelebrationModal
+          isOpen={activePRCelebration !== null}
+          exerciseName={activePRCelebration?.exerciseName || ''}
+          weight={activePRCelebration?.weight || 0}
+          reps={activePRCelebration?.reps || 0}
           unit={db.profile.preferredUnit}
           onClose={() => setActivePRCelebration(null)}
         />
-      )}
+
+      <SettingsDialog isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} db={db} onUpdateDatabase={setDb} />
 
       <ConfirmDialog
         isOpen={isDiscardDialogOpen}

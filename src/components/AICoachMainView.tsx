@@ -1,24 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Sparkles, Send, Bot, User, Loader2, Dumbbell, 
-  CheckCircle2, Play, ArrowRight, Zap, RefreshCw, History, LayoutDashboard,
-  Trash2, Brain, Plus, X, Target, MessagesSquare
+  CheckCircle2, Play, ArrowRight, Zap,
+  Trash2, Plus, MessagesSquare
 } from 'lucide-react';
 import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
 import {
-  addPersonalMemoryApi,
   createAIChatSession,
   deleteAIChatSession,
   fetchAIChatHistory,
   fetchAIChatSessions,
   fetchAIUsageSummary,
-  removePersonalMemoryApi,
   sendAIChatMessage,
 } from '../lib/api';
 import { ChatMarkdown } from './ChatMarkdown';
 import { AITraceDetails } from './AITraceDetails';
 import { ConfirmDialog } from './ConfirmDialog';
-import { motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AIUsageMeter,
   EMPTY_AI_USAGE,
@@ -77,9 +75,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSwitchingThread, setIsSwitchingThread] = useState(false);
+  const [threadError, setThreadError] = useState('');
+  const threadRequest = useRef(0);
   const [lastAction, setLastAction] = useState<any>(null);
-  const [newMemoryInput, setNewMemoryInput] = useState<string>('');
-  const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
   const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
   const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const [accountUsage, setAccountUsage] = useState<AIUsageSummary | null>(null);
@@ -90,45 +89,24 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const handledPromptRef = useRef<string>('');
   const reduceMotion = useReducedMotion();
 
-  const userMemories = Array.isArray(db.profile.personalMemories) ? db.profile.personalMemories : [];
-
-  const handleAddMemory = async (customText?: string) => {
-    const memoryText = (customText || newMemoryInput).trim();
-    if (!memoryText || isSavingMemory) return;
-
-    setIsSavingMemory(true);
-    try {
-      const updatedDb = await addPersonalMemoryApi(db.profile, memoryText);
-      onUpdateDatabase(updatedDb);
-      if (!customText) setNewMemoryInput('');
-    } catch (e) {
-      console.error('Failed to save memory:', e);
-    } finally {
-      setIsSavingMemory(false);
-    }
-  };
-
-  const handleRemoveMemory = async (memoryToRemove: string) => {
-    if (isSavingMemory) return;
-    setIsSavingMemory(true);
-    try {
-      const updatedDb = await removePersonalMemoryApi(db.profile, memoryToRemove);
-      onUpdateDatabase(updatedDb);
-    } catch (e) {
-      console.error('Failed to remove memory:', e);
-    } finally {
-      setIsSavingMemory(false);
-    }
-  };
-
   const loadThread = async (threadId: string) => {
+    const request = ++threadRequest.current;
+    setIsSwitchingThread(true);
+    setThreadError('');
+    try {
     const history = await fetchAIChatHistory(threadId);
+    if (request !== threadRequest.current) return;
     setMessages([DEFAULT_WELCOME_MSG, ...history]);
     setActiveThreadId(threadId);
     localStorage.setItem('active_ai_thread_id', threadId);
     setLastAction(null);
     setProposedWorkout(null);
     setSessionUsage(EMPTY_AI_USAGE);
+    } catch {
+      if (request === threadRequest.current) setThreadError('Could not load this chat. Please try again.');
+    } finally {
+      if (request === threadRequest.current) setIsSwitchingThread(false);
+    }
   };
 
   const refreshSessions = async () => {
@@ -183,7 +161,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
   const handleSendMessage = async (textToSend?: string) => {
     const text = textToSend || inputMessage;
-    if (!text.trim() || isLoading) return;
+    if (!text.trim() || isLoading || isSwitchingThread) return;
 
     const userMsg: AIChatMessage = {
       id: `msg_${Date.now()}`,
@@ -296,23 +274,23 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   ];
 
   return (
-    <div className="space-y-4 font-sans">
+    <div className="font-sans">
       
       {/* Main Grid: Interactive Chat + Quick Commands */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="app-workspace overflow-hidden">
         
         {/* Left 2-Cols: Pastel Light AI Chat Workspace */}
-        <div className="app-surface lg:col-span-2 flex h-[580px] flex-col overflow-hidden sm:h-[620px]">
+        <div className="flex h-[min(48rem,calc(100dvh-12rem))] min-h-80 flex-col">
           
           {/* Chat Stream Header - Light Theme */}
-          <div className="flex items-center justify-between border-b border-slate-200/80 bg-white/70 px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/70 px-4 py-3 sm:px-5">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center font-bold">
+              <div className="w-8 h-8 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center font-bold">
                 <Sparkles className="h-4 w-4" />
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-slate-800">
-                  GymPulse AI
+                  TimsGym Coach
                 </h3>
                 <AIUsageMeter usage={sessionUsage} summary={accountUsage} />
               </div>
@@ -332,7 +310,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
               <button
                 onClick={handleNewChat}
                 disabled={isLoading}
-                className="app-icon-button min-h-9 min-w-9 bg-teal-50 text-teal-800 hover:bg-teal-100 disabled:opacity-40"
+                className="app-icon-button min-h-9 min-w-9 bg-brand-50 text-brand-800 hover:bg-brand-100 disabled:opacity-40"
                 title="Neuer Chat"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -350,19 +328,31 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
           </div>
 
           {/* Messages Stream Container */}
+          {threadError && <p role="alert" className="px-4 py-2 text-sm text-rose-700">{threadError}</p>}
+          {isSwitchingThread && <p role="status" className="px-4 py-2 text-sm text-slate-600">Loading chat...</p>}
           <div 
             ref={messagesContainerRef}
-            className="flex-1 space-y-3 overflow-y-auto bg-slate-50/50 p-4 font-sans scroll-smooth"
+            aria-busy={isSwitchingThread}
+            className="min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-4 font-sans"
           >
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex gap-2.5 ${
-                  msg.role === 'user' ? 'justify-end' : 'justify-start'
-                }`}
-              >
+            <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={activeThreadId || 'new-chat'}
+              initial={reduceMotion ? false : { opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 10 }}
+              transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
+              className="mx-auto max-w-4xl space-y-3"
+            >
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-2.5 ${
+                    msg.role === 'user' ? 'justify-end' : 'justify-start'
+                  }`}
+                >
                 {msg.role === 'assistant' && (
-                  <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <Bot className="h-3.5 w-3.5" />
                   </div>
                 )}
@@ -370,7 +360,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <div
                   className={`max-w-[88%] rounded-lg px-3.5 py-2.5 text-sm leading-relaxed sm:max-w-[80%] ${
                     msg.role === 'user'
-                      ? 'bg-teal-700 text-white font-medium rounded-tr-none shadow-xs'
+                      ? 'bg-brand-700 text-white font-medium rounded-tr-none shadow-xs'
                       : 'bg-white border border-slate-200 text-slate-800 shadow-xs rounded-tl-none'
                   }`}
                 >
@@ -382,7 +372,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                   {msg.role === 'assistant' && msg.toolsUsed && msg.toolsUsed.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {msg.toolsUsed.map((t, i) => (
-                        <span key={i} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
+                        <span key={i} className="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
                           🔧 {t}
                         </span>
                       ))}
@@ -390,7 +380,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                   )}
 
                   {msg.role === 'assistant' && msg.usage && (
-                    <div className="mt-1 text-[9px] font-mono text-slate-400">
+                    <div className="mt-1 text-xs font-mono text-slate-400">
                       {formatAIUsage(msg.usage)}
                     </div>
                   )}
@@ -399,7 +389,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     <AITraceDetails trace={msg.trace} />
                   )}
 
-                  <span className={`block text-[9px] font-mono mt-1 text-right ${msg.role === 'user' ? 'text-teal-100' : 'text-slate-400'}`}>
+                  <span className={`block text-xs font-mono mt-1 text-right ${msg.role === 'user' ? 'text-brand-100' : 'text-slate-400'}`}>
                     {msg.timestamp}
                   </span>
                 </div>
@@ -409,16 +399,18 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     <User className="h-3.5 w-3.5" />
                   </div>
                 )}
-              </div>
-            ))}
+                </div>
+              ))}
+            </motion.div>
+            </AnimatePresence>
 
             {isLoading && (
               <div className="flex gap-2.5 justify-start">
-                <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center flex-shrink-0">
+                <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0">
                   <Bot className="h-3.5 w-3.5" />
                 </div>
                 <div className="flex items-center gap-2 rounded-lg rounded-tl-none border border-slate-200 bg-white px-3.5 py-2 shadow-xs">
-                  <Loader2 className="h-3.5 w-3.5 text-teal-600 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 text-brand-600 animate-spin" />
                   <span className="text-xs text-slate-500 font-medium">
                     Thinking through this...
                   </span>
@@ -428,14 +420,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
           </div>
 
           {/* Workout Proposal Card — user confirms before it actually starts */}
+          <AnimatePresence>
           {proposedWorkout && (
             <motion.div
-              className="mx-4 mb-1 mt-2 rounded-lg border border-teal-200 bg-teal-50/70 p-3 shadow-sm"
+              className="mx-4 mb-1 mt-2 rounded-lg border border-brand-200 bg-brand-50/70 p-3 shadow-sm"
               initial={reduceMotion ? false : { opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 360, damping: 30 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
+              transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
             >
-              <div className="flex items-center gap-1.5 mb-2 text-teal-800">
+              <div className="flex items-center gap-1.5 mb-2 text-brand-800">
                 <Dumbbell className="h-4 w-4" />
                 <span className="text-sm font-semibold">Workout proposal: {proposedWorkout.title}</span>
               </div>
@@ -450,7 +444,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => { onStartWorkoutSession(proposedWorkout); setProposedWorkout(null); }}
-                  className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-teal-700 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                  className="app-primary flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold shadow-sm"
                 >
                   <Play className="h-3.5 w-3.5" /> Workout starten
                 </button>
@@ -465,11 +459,13 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
             </motion.div>
           )}
 
+          </AnimatePresence>
+
           {/* Action Confirmation Banner (proposals use the card above instead) */}
           {lastAction && lastAction.type !== 'workout_proposed' && (
-            <div className="px-4 py-2 bg-teal-50 border-t border-b border-teal-200 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-1.5 text-teal-800 font-medium">
-                <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" />
+            <div className="px-4 py-2 bg-brand-50 border-t border-b border-brand-200 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-brand-800 font-medium">
+                <CheckCircle2 className="h-3.5 w-3.5 text-brand-600" />
                 <span>
                   Updated: <strong className="capitalize">{lastAction.type.replace('_', ' ')}</strong>
                 </span>
@@ -480,10 +476,18 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                   else if (lastAction.type === 'workout_logged') onSelectTab('history');
                   else if (lastAction.type === 'exercise_added') onSelectTab('exercises');
                 }}
-                className="text-teal-700 underline font-semibold hover:text-teal-900"
+                className="text-brand-700 underline font-semibold hover:text-brand-900"
               >
                 View
               </button>
+            </div>
+          )}
+
+          {messages.length <= 1 && (
+            <div className="flex flex-wrap gap-2 px-4 py-2">
+              {quickActionPrompts.map((cmd) => (
+                <button key={cmd.title} disabled={isLoading} onClick={() => setInputMessage(cmd.prompt)} className="rounded-lg px-3 text-sm font-medium text-green-900 hover:bg-green-50">{cmd.title}</button>
+              ))}
             </div>
           )}
 
@@ -501,13 +505,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 placeholder="Ask about training, nutrition, or your next session"
-                className="flex-1 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400"
+                aria-label="Message the coach"
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400"
                 disabled={isLoading}
               />
               <button
                 type="submit"
-                disabled={!inputMessage.trim() || isLoading}
-                className="app-icon-button bg-teal-700 text-white shadow-sm hover:bg-teal-800 disabled:opacity-40"
+                aria-label="Send message"
+                title="Send message"
+                disabled={!inputMessage.trim() || isLoading || isSwitchingThread}
+                className="app-icon-button app-primary shadow-sm disabled:opacity-40"
               >
                 {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </button>
@@ -516,160 +523,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
         </div>
 
-        {/* Right 1-Col: Soft Light Quick Command Cards & AI Memory */}
-        <div className="space-y-4">
 
-          {/* AI Persistent Memory & Personal Goals Card */}
-          <div className="app-surface p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-sm font-semibold text-teal-800">
-                <Brain className="h-4 w-4 text-teal-600" />
-                <span>KI-Gedächtnis & Ziele</span>
-              </div>
-              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-700">
-                {userMemories.length} aktiv
-              </span>
-            </div>
-
-            <p className="text-sm leading-5 text-slate-600">
-              TimsGym AI merkt sich deine persönlichen Ziele & Infos für alle Trainingspläne und Empfehlungen.
-            </p>
-
-            {/* List of active memories */}
-            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {userMemories.length === 0 ? (
-                <div className="p-3 text-center bg-slate-50 border border-dashed border-slate-200 rounded-xl text-slate-400 text-xs">
-                  Noch keine persönlichen Infos gespeichert.
-                </div>
-              ) : (
-                userMemories.map((mem, idx) => (
-                  <div
-                    key={idx}
-                  className="group flex items-center justify-between gap-2 rounded-lg border border-slate-200/70 bg-slate-50 p-2.5 text-sm text-slate-800 hover:border-slate-300"
-                  >
-                    <div className="flex items-start gap-1.5 min-w-0">
-                      <Target className="h-3.5 w-3.5 text-teal-600 flex-shrink-0 mt-0.5" />
-                      <span className="text-xs font-medium text-slate-800 break-words">{mem}</span>
-                    </div>
-                    <button
-                      onClick={() => handleRemoveMemory(mem)}
-                      disabled={isSavingMemory}
-                    className="app-icon-button min-h-8 min-w-8 flex-shrink-0 text-slate-400 opacity-80 hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
-                      title="Erinnerung löschen"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Add memory form */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleAddMemory();
-              }}
-              className="flex items-center gap-1.5 pt-1"
-            >
-              <input
-                type="text"
-                value={newMemoryInput}
-                onChange={(e) => setNewMemoryInput(e.target.value)}
-                placeholder="z.B. Sprungkraft für Basketball verbessern..."
-                disabled={isSavingMemory}
-                className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-800 placeholder-slate-400"
-              />
-              <button
-                type="submit"
-                disabled={!newMemoryInput.trim() || isSavingMemory}
-                className="app-icon-button min-h-9 min-w-9 bg-teal-700 text-white shadow-xs hover:bg-teal-800 disabled:opacity-40"
-                title="Erinnerung speichern"
-              >
-                {isSavingMemory ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              </button>
-            </form>
-
-            {/* Quick Memory Suggestion Chips */}
-            <div className="pt-1 flex flex-wrap gap-1.5">
-              {[
-                "Sprungkraft verbessern",
-                "Gewicht verlieren / Fettabbau",
-                "Muskelaufbau Fokus",
-                "Schultern schonen",
-              ].filter(chip => !userMemories.includes(chip)).slice(0, 2).map((chip, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleAddMemory(chip)}
-                  disabled={isSavingMemory}
-                  className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 hover:border-teal-300 transition-colors text-left"
-                >
-                  + {chip}
-                </button>
-              ))}
-            </div>
-          </div>
-          
-          <div className="border-t border-slate-200/80 px-1 pt-4 space-y-3">
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-teal-800">
-              <Zap className="h-3.5 w-3.5 text-teal-600" />
-              <span>Quick Actions</span>
-            </div>
-
-            <div className="space-y-2">
-              {quickActionPrompts.map((cmd, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleSendMessage(cmd.prompt)}
-                  disabled={isLoading}
-                  className="group flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white p-3 text-left text-sm text-slate-700 hover:border-teal-300 hover:bg-teal-50/40 hover:text-slate-900"
-                >
-                  <div>
-                    <p className="font-bold text-teal-800 text-xs">{cmd.title}</p>
-                    <p className="text-[11px] text-slate-500 truncate max-w-[200px]">{cmd.prompt}</p>
-                  </div>
-                  <ArrowRight className="h-3.5 w-3.5 text-slate-400 group-hover:text-teal-700 transition-colors flex-shrink-0" />
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Navigation Cards */}
-          <div className="border-t border-slate-200/80 px-1 pt-4 space-y-2.5">
-            <p className="app-eyebrow">Navigate</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => onSelectTab('active-workout')}
-                className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/50 text-xs font-medium text-slate-700 hover:text-slate-900 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <Play className="h-3.5 w-3.5 text-teal-600" />
-                <span>Workout</span>
-              </button>
-              <button
-                onClick={() => onSelectTab('history')}
-                className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/50 text-xs font-medium text-slate-700 hover:text-slate-900 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <History className="h-3.5 w-3.5 text-teal-600" />
-                <span>History</span>
-              </button>
-              <button
-                onClick={() => onSelectTab('exercises')}
-                className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/50 text-xs font-medium text-slate-700 hover:text-slate-900 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <Dumbbell className="h-3.5 w-3.5 text-teal-600" />
-                <span>PR Ledger</span>
-              </button>
-              <button
-                onClick={() => onSelectTab('analytics')}
-                className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-teal-300 hover:bg-teal-50/50 text-xs font-medium text-slate-700 hover:text-slate-900 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <LayoutDashboard className="h-3.5 w-3.5 text-teal-600" />
-                <span>Overview</span>
-              </button>
-            </div>
-          </div>
-
-        </div>
 
       </div>
 

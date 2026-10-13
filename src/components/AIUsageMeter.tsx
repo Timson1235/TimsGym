@@ -41,7 +41,7 @@ export const AIUsageMeter: React.FC<{ usage: AIUsage; summary?: AIUsageSummary |
     const month = summary.currentMonth;
     return (
       <div
-        className={`text-[10px] font-mono leading-tight ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+        className={`text-xs font-mono leading-tight ${dark ? 'text-slate-400' : 'text-slate-500'}`}
         title={`${total.requests} Requests seit Tracking-Start · ${total.inputTokens.toLocaleString('de-DE')} Input · ${total.outputTokens.toLocaleString('de-DE')} Output · geschätzte API-Kosten in USD`}
       >
         <p>Gesamt: {total.totalTokens.toLocaleString('de-DE')} Tokens · ~${total.estimatedCostUsd.toFixed(4)}</p>
@@ -53,7 +53,7 @@ export const AIUsageMeter: React.FC<{ usage: AIUsage; summary?: AIUsageSummary |
   }
   return (
     <p
-      className={`text-[10px] font-mono ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+      className={`text-xs font-mono ${dark ? 'text-slate-400' : 'text-slate-500'}`}
       title={`${usage.inputTokens.toLocaleString('de-DE')} Input · ${usage.outputTokens.toLocaleString('de-DE')} Output · geschätzte API-Kosten in USD`}
     >
       {usage.totalTokens > 0

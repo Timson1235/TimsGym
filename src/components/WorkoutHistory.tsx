@@ -45,13 +45,13 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
   };
 
   return (
-    <div className="space-y-6 font-sans">
+      <div className="space-y-6 font-sans">
       
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="app-page-header flex-col sm:flex-row sm:items-center">
         <div>
           <h2 className="flex items-center gap-2.5 text-2xl font-semibold text-slate-900">
-            <History className="h-6 w-6 text-teal-700" />
+            <History className="h-6 w-6 text-brand-700" />
             Workout History & Logs
           </h2>
           <p className="mt-1 text-sm text-slate-600">
@@ -65,6 +65,7 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
             <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
             <input
               type="text"
+              aria-label="Search workout history"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search workouts..."
@@ -79,8 +80,8 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
           >
             {backedUp ? (
               <>
-                <Check className="h-4 w-4 text-teal-600" />
-                <span className="hidden sm:inline text-teal-700">Gesichert</span>
+                <Check className="h-4 w-4 text-brand-600" />
+                <span className="hidden sm:inline text-brand-700">Gesichert</span>
               </>
             ) : (
               <>
@@ -93,7 +94,7 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
       </div>
 
       {/* Workout Logs List */}
-      <div className="space-y-4">
+      <div className="app-log-list">
         {filteredWorkouts.length === 0 ? (
           <div className="app-surface p-12 text-center text-slate-500">
             <History className="h-10 w-10 text-slate-300 mx-auto mb-3" />
@@ -107,17 +108,16 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
             return (
               <div
                 key={w.id}
-                className="app-surface overflow-hidden"
+                className="overflow-hidden border-b border-slate-200/80 bg-white/45 last:border-b-0"
               >
                 {/* Main Card Header */}
                 <div
-                  onClick={() => toggleExpand(w.id)}
-                  className="flex cursor-pointer flex-col justify-between gap-4 p-5 hover:bg-slate-50/60 sm:flex-row sm:items-center"
+                  className="flex cursor-pointer flex-col justify-between gap-4 px-1 py-5 hover:bg-white/70 sm:flex-row sm:items-center sm:px-5"
                 >
-                  <div className="space-y-1">
+                  <button className="min-w-0 flex-1 space-y-1 text-left" onClick={() => toggleExpand(w.id)} aria-expanded={isExpanded} aria-controls={`workout-${w.id}`} aria-label={`Show details for ${w.title}`}>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-teal-800 flex items-center gap-1">
-                        <Calendar className="h-3.5 w-3.5 text-teal-600" />
+                      <span className="text-xs font-mono font-bold text-brand-800 flex items-center gap-1">
+                        <Calendar className="h-3.5 w-3.5 text-brand-600" />
                         {formatDateString(w.date)}
                       </span>
                     </div>
@@ -125,12 +125,12 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
                     {w.notes && (
                       <p className="text-xs text-slate-500 italic line-clamp-1">"{w.notes}"</p>
                     )}
-                  </div>
+                  </button>
 
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-3">
                     <div className="text-right text-xs space-y-0.5">
                       <p className="font-mono font-bold text-slate-900">
-                        Vol: <span className="text-teal-800">{w.totalVolume.toLocaleString()} {unit}</span>
+                        Vol: <span className="text-brand-800">{w.totalVolume.toLocaleString()} {unit}</span>
                       </p>
                       <p className="text-xs text-slate-500">
                         {w.exercises.length} ex • {w.durationMinutes} mins
@@ -143,10 +143,10 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
                           e.stopPropagation();
                           onRepeatWorkout(w);
                         }}
-                        className="flex min-h-10 items-center gap-1.5 rounded-lg bg-teal-50 px-3 text-sm font-medium text-teal-800 hover:bg-teal-100"
+                        className="flex min-h-10 items-center gap-1.5 rounded-lg bg-brand-50 px-3 text-sm font-medium text-brand-800 hover:bg-brand-100"
                         title="Repeat this workout in a new session"
                       >
-                        <Repeat className="h-3.5 w-3.5 text-teal-600" />
+                        <Repeat className="h-3.5 w-3.5 text-brand-600" />
                         <span>Repeat</span>
                       </button>
 
@@ -161,31 +161,31 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
                         <Trash2 className="h-4 w-4" />
                       </button>
 
-                      <div className="text-slate-400">
+                      <button onClick={() => toggleExpand(w.id)} aria-expanded={isExpanded} aria-controls={`workout-${w.id}`} aria-label={isExpanded ? 'Collapse workout details' : 'Expand workout details'} className="app-icon-button text-slate-500">
                         {isExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
-                      </div>
+                      </button>
                     </div>
                   </div>
                 </div>
 
                 {/* Expanded Set Details */}
                 {isExpanded && (
-                  <div className="border-t border-slate-200 bg-slate-50/50 p-5 space-y-4">
+                  <div id={`workout-${w.id}`} className="space-y-4 border-t border-slate-200 bg-slate-50/50 px-1 py-5 sm:px-5">
                     <h4 className="app-eyebrow">
                       Exercise and set details
                     </h4>
 
                     <div className="space-y-3">
                       {w.exercises.map((we) => (
-                        <div key={we.id} className="app-surface-subtle space-y-2 p-3.5">
+                        <div key={we.id} className="space-y-2 border-b border-slate-200 py-3 last:border-0">
                           <p className="text-sm font-semibold text-slate-900">{we.exerciseName}</p>
                           <div className="flex flex-wrap gap-2">
                             {we.sets.map((s) => (
                               <span
                                 key={s.id}
-                                className={`text-[11px] font-mono px-2.5 py-1 rounded-lg border ${
+                                className={`text-xs font-mono px-2.5 py-1 rounded-lg border ${
                                   s.completed
-                                    ? 'bg-teal-50 border-teal-200 text-teal-900 font-semibold'
+                                    ? 'bg-brand-50 border-brand-200 text-brand-900 font-semibold'
                                     : 'bg-slate-100 border-slate-200 text-slate-500'
                                 }`}
                               >

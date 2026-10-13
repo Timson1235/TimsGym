@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Plus, Minus, X, Volume2 } from 'lucide-react';
+import { Clock, Plus, Minus, X } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
 import { playTimerBeep } from '../lib/utils';
 
 interface RestTimerModalProps {
@@ -13,6 +14,7 @@ export const RestTimerModal: React.FC<RestTimerModalProps> = ({
 }) => {
   const [secondsLeft, setSecondsLeft] = useState<number>(initialSeconds);
   const [totalSeconds, setTotalSeconds] = useState<number>(initialSeconds);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     if (secondsLeft <= 0) {
@@ -41,15 +43,25 @@ export const RestTimerModal: React.FC<RestTimerModalProps> = ({
   };
 
   return (
-    <div className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-50 bg-slate-900 border border-emerald-500/50 rounded-2xl p-4 shadow-2xl w-80 animate-slide-up">
+    <motion.div
+      className="app-timer fixed bottom-20 right-4 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-lime-300/25 bg-[#1c2b20] p-4 shadow-2xl md:bottom-6 sm:right-6"
+      role="region"
+      aria-label="Rest timer"
+      initial={reduceMotion ? false : { opacity: 0, y: 28, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 28, scale: 0.96 }}
+      transition={reduceMotion ? { duration: 0.1 } : { type: 'spring', bounce: 0, duration: 0.3 }}
+    >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-emerald-400 animate-spin-slow" />
+          <Clock className="h-4 w-4 text-lime-300 animate-spin-slow" />
           <span className="text-xs font-bold text-white">Rest Interval Timer</span>
         </div>
         <button
           onClick={onClose}
-          className="text-slate-400 hover:text-white p-1"
+          className="app-icon-button text-slate-300 hover:text-white"
+          aria-label="Close rest timer"
+          title="Close rest timer"
         >
           <X className="h-4 w-4" />
         </button>
@@ -57,10 +69,10 @@ export const RestTimerModal: React.FC<RestTimerModalProps> = ({
 
       {/* Countdown Timer Display */}
       <div className="text-center py-2">
-        <div className="text-3xl font-black text-emerald-400 font-mono">
+        <div className="text-3xl font-black text-lime-300 font-mono">
           {formatSecs(secondsLeft)}
         </div>
-        <p className="text-[11px] text-slate-400 mt-0.5">
+        <p role="status" className="text-sm text-slate-300 mt-0.5">
           {secondsLeft === 0 ? "Rest complete! Time for next set 💪" : "Recovering for next set..."}
         </p>
       </div>
@@ -68,8 +80,8 @@ export const RestTimerModal: React.FC<RestTimerModalProps> = ({
       {/* Progress Bar */}
       <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden my-3">
         <div
-          className="bg-emerald-500 h-full transition-all duration-1000 ease-linear"
-          style={{ width: `${percentage}%` }}
+          className="h-full origin-left bg-lime-300 transition-transform duration-1000 ease-linear"
+          style={{ transform: `scaleX(${percentage / 100})` }}
         ></div>
       </div>
 
@@ -91,11 +103,11 @@ export const RestTimerModal: React.FC<RestTimerModalProps> = ({
 
         <button
           onClick={onClose}
-          className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition-colors"
+          className="flex-1 rounded-lg bg-lime-300 py-1.5 text-xs font-black text-[#1c2b20] hover:bg-lime-200"
         >
           Skip
         </button>
       </div>
-    </div>
+    </motion.div>
   );
 };

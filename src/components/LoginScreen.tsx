@@ -27,22 +27,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center px-4 py-8 sm:px-6 lg:px-8 font-sans selection:bg-teal-100 selection:text-slate-900">
+    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center px-4 py-8 sm:px-6 lg:px-8 font-sans selection:bg-brand-100 selection:text-slate-900">
       
       {/* Container Card */}
       <div className="w-full max-w-md bg-white border border-slate-200/80 rounded-3xl p-8 shadow-sm space-y-8">
         
         {/* Brand Header */}
         <div className="text-center space-y-3">
-          <div className="w-16 h-16 bg-teal-700 rounded-2xl flex items-center justify-center text-white mx-auto shadow-md">
+          <div className="w-16 h-16 bg-brand-700 rounded-lg flex items-center justify-center text-white mx-auto shadow-md">
             <Dumbbell className="h-8 w-8 stroke-[2.5]" />
           </div>
           <div>
             <div className="flex items-center justify-center gap-2">
-              <h1 className="text-2xl font-black tracking-tight text-slate-900 uppercase italic">
+              <h1 className="text-2xl font-black tracking-tight text-slate-900 italic">
                 TimsGym
               </h1>
-              <span className="text-[11px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200">
+              <span className="text-xs font-bold tracking-normal px-2 py-0.5 rounded-md bg-brand-50 text-brand-800 border border-brand-200">
                 AI Coach
               </span>
             </div>
@@ -53,38 +53,38 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
         </div>
 
         {/* Feature Highlights for Multi-User */}
-        <div className="space-y-3 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/60">
+        <div className="space-y-3 bg-slate-50/80 p-4 rounded-lg border border-slate-200/60">
           <div className="flex items-start gap-3">
-            <div className="p-1.5 rounded-lg bg-teal-100 text-teal-800 flex-shrink-0 mt-0.5">
+            <div className="p-1.5 rounded-lg bg-brand-100 text-brand-800 flex-shrink-0 mt-0.5">
               <Database className="h-4 w-4" />
             </div>
             <div>
               <h2 className="text-xs font-bold text-slate-800">Eigener Cloud SQL Speicher</h2>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
+              <p className="text-xs text-slate-500 leading-relaxed">
                 Jeder Nutzer erhält automatisch eine eigene, private Datenbank für Workouts, PRs und Notizen.
               </p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="p-1.5 rounded-lg bg-teal-100 text-teal-800 flex-shrink-0 mt-0.5">
+            <div className="p-1.5 rounded-lg bg-brand-100 text-brand-800 flex-shrink-0 mt-0.5">
               <Brain className="h-4 w-4" />
             </div>
             <div>
               <h2 className="text-xs font-bold text-slate-800">Gemini KI-Gedächtnis</h2>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
+              <p className="text-xs text-slate-500 leading-relaxed">
                 Merkt sich deine Ziele (Muskelaufbau, Sprungkraft, Fettabbau) und steuert deine Progression.
               </p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="p-1.5 rounded-lg bg-teal-100 text-teal-800 flex-shrink-0 mt-0.5">
+            <div className="p-1.5 rounded-lg bg-brand-100 text-brand-800 flex-shrink-0 mt-0.5">
               <Trophy className="h-4 w-4" />
             </div>
             <div>
               <h2 className="text-xs font-bold text-slate-800">Automatische PR-Erkennung</h2>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
+              <p className="text-xs text-slate-500 leading-relaxed">
                 Errechnet sofort dein 1RM und feiert neue Bestleistungen.
               </p>
             </div>
@@ -93,7 +93,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
 
         {/* Error Alert if any */}
         {errorMsg && (
-          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium text-center">
+          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg font-medium text-center">
             {errorMsg}
           </div>
         )}
@@ -104,7 +104,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
             id="google-signin-btn"
             onClick={handleGoogleSignIn}
             disabled={isSigningIn}
-            className="w-full flex items-center justify-center gap-3 py-3.5 px-4 rounded-2xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-xs hover:shadow transition-all disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-3 py-3.5 px-4 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-bold text-sm shadow-xs hover:shadow transition-all disabled:opacity-50"
           >
             {isSigningIn ? (
               <>
@@ -147,8 +147,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
         </div>
 
         {/* Security & Multi-User Note */}
-        <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400 font-medium text-center">
-          <ShieldCheck className="h-3.5 w-3.5 text-teal-600 flex-shrink-0" />
+        <div className="flex items-center justify-center gap-1.5 text-xs text-slate-400 font-medium text-center">
+          <ShieldCheck className="h-3.5 w-3.5 text-brand-600 flex-shrink-0" />
           <span>Sichere Authentifizierung & getrennter Speicher je Google-Konto</span>
         </div>
 

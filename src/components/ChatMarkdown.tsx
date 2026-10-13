@@ -17,7 +17,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({
     ? 'text-lime-300'
     : isUser
       ? 'text-white underline decoration-white/60'
-      : 'text-teal-700';
+      : 'text-brand-700';
 
   const components: Components = {
     p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
@@ -39,7 +39,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({
     blockquote: ({ children }) => (
       <blockquote
         className={`my-2 border-l-2 pl-3 ${
-          isDark ? 'border-lime-400/50 text-slate-300' : isUser ? 'border-white/50' : 'border-teal-300 text-slate-600'
+          isDark ? 'border-lime-400/50 text-slate-300' : isUser ? 'border-white/50' : 'border-brand-300 text-slate-600'
         }`}
       >
         {children}
@@ -48,7 +48,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({
     code: ({ children }) => (
       <code
         className={`rounded px-1 py-0.5 font-mono text-[0.92em] ${
-          isDark ? 'bg-slate-800 text-lime-300' : isUser ? 'bg-teal-900/30 text-white' : 'bg-slate-100 text-slate-800'
+          isDark ? 'bg-slate-800 text-lime-300' : isUser ? 'bg-brand-900/30 text-white' : 'bg-slate-100 text-slate-800'
         }`}
       >
         {children}
@@ -57,7 +57,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({
     pre: ({ children }) => (
       <pre
         className={`my-2 max-w-full overflow-x-auto rounded-lg p-3 ${
-          isDark ? 'bg-slate-950' : isUser ? 'bg-teal-900/30' : 'bg-slate-100'
+          isDark ? 'bg-slate-950' : isUser ? 'bg-brand-900/30' : 'bg-slate-100'
         }`}
       >
         {children}

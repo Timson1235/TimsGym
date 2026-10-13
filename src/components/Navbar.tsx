@@ -1,5 +1,5 @@
 import React from 'react';
-import { Dumbbell, History, LineChart, Sparkles, Play, LogIn, LogOut, User as UserIcon } from 'lucide-react';
+import { Dumbbell, History, LineChart, Sparkles, Play, LogIn, LogOut, Settings, User as UserIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { WorkoutSession } from '../types';
 import { User, signInWithPopup, signOut } from 'firebase/auth';
@@ -14,6 +14,7 @@ interface NavbarProps {
   preferredUnit: 'lbs' | 'kg';
   onToggleUnit: () => void;
   onOpenAICoach: () => void;
+  onOpenSettings: () => void;
   user?: User | null;
 }
 
@@ -25,7 +26,7 @@ const tabs: Array<{ id: AppTab; label: string; shortLabel: string; icon: typeof 
   { id: 'analytics', label: 'Progress', shortLabel: 'Progress', icon: LineChart },
 ];
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeWorkout, user }) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeWorkout, user, onOpenSettings }) => {
   const reduceMotion = useReducedMotion();
 
   const handleGoogleSignIn = async () => {
@@ -45,6 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
   };
 
   return (
+    <>
     <header className="sticky top-0 z-40 border-b border-slate-200/60 bg-white/78 text-slate-800 backdrop-blur-xl">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between gap-3">
@@ -53,7 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
             onClick={() => setActiveTab('ai-coach')}
             aria-label="Go to AI Coach"
           >
-            <span className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-teal-700 text-white shadow-sm">
+            <span className="app-brand-mark flex h-9 w-9 flex-none items-center justify-center rounded-lg">
               <Dumbbell className="h-5 w-5 stroke-[2.2]" />
             </span>
             <span className="min-w-0">
@@ -71,17 +73,18 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
                   key={id}
                   className={`relative flex min-h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium ${selected ? 'text-slate-900' : 'text-slate-600 hover:text-slate-900'}`}
                   onClick={() => setActiveTab(id)}
+                  aria-current={selected ? 'page' : undefined}
                   whileTap={reduceMotion ? undefined : { scale: 0.97 }}
                 >
                   {selected && (
                     <motion.span
                       layoutId="desktop-active-tab"
                       className="absolute inset-0 rounded-md bg-white shadow-sm"
-                      transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 34 }}
+                      transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
                     />
                   )}
                   <span className="relative flex items-center gap-1.5">
-                    {workoutTab && activeWorkout ? <span className="h-2 w-2 rounded-full bg-teal-600" aria-label="Workout in progress" /> : <Icon className={`h-3.5 w-3.5 ${selected || id === 'ai-coach' ? 'text-teal-700' : 'text-slate-500'}`} />}
+                    {workoutTab && activeWorkout ? <span className="h-2 w-2 rounded-full bg-brand-600" aria-label="Workout in progress" /> : <Icon className={`h-3.5 w-3.5 ${selected || id === 'ai-coach' ? 'text-brand-700' : 'text-slate-500'}`} />}
                     {activeWorkout && workoutTab ? 'In workout' : label}
                   </span>
                 </motion.button>
@@ -90,6 +93,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
           </nav>
 
           <div className="flex flex-none items-center gap-1.5">
+            <button onClick={onOpenSettings} aria-label="Settings" title="Settings" className="app-icon-button text-slate-600 hover:bg-slate-100"><Settings className="h-5 w-5" /></button>
             {user ? (
               <>
                 <div className="hidden items-center gap-2 rounded-lg px-2 py-1.5 sm:flex">
@@ -114,6 +118,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
         </div>
       </div>
 
+    </header>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/70 bg-white/92 px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-xl md:hidden" aria-label="Main navigation">
         <div className="mx-auto flex max-w-lg items-stretch justify-around">
           {tabs.map(({ id, shortLabel, icon: Icon }) => {
@@ -123,12 +128,13 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
               <motion.button
                 key={id}
                 onClick={() => setActiveTab(id)}
-                className={`relative flex min-h-12 min-w-13 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-medium ${selected ? 'text-teal-800' : 'text-slate-500'}`}
+                aria-current={selected ? 'page' : undefined}
+                className={`relative flex min-h-12 min-w-13 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${selected ? 'text-brand-800' : 'text-slate-500'}`}
                 whileTap={reduceMotion ? undefined : { scale: 0.94 }}
               >
-                {selected && <motion.span layoutId="mobile-active-tab" className="absolute inset-0 rounded-lg bg-teal-50" transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 34 }} />}
+                {selected && <motion.span layoutId="mobile-active-tab" className="absolute inset-0 rounded-lg bg-brand-50" transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }} />}
                 <span className="relative">
-                  {workoutTab && activeWorkout ? <span className="mt-1 block h-2.5 w-2.5 rounded-full bg-teal-700" /> : <Icon className="h-4 w-4" />}
+                  {workoutTab && activeWorkout ? <span className="mt-1 block h-2.5 w-2.5 rounded-full bg-brand-700" /> : <Icon className="h-4 w-4" />}
                 </span>
                 <span className="relative">{activeWorkout && workoutTab ? 'Active' : shortLabel}</span>
               </motion.button>
@@ -136,6 +142,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
           })}
         </div>
       </nav>
-    </header>
+    </>
   );
 };
