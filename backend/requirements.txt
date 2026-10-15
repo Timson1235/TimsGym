@@ -10,4 +10,4 @@ pydantic-settings>=2.4    # typed config from .env
 certifi>=2024.7.4         # CA bundle for direct Anthropic HTTPS requests
 
 # Phase 2: AI agent
-google-genai>=2.24.0      # Gemini 3.8 + thinking levels + function-call IDs
+google-genai>=2.24.0      # Gemini 3.8 + thinking levels + function calling

@@ -72,6 +72,7 @@ def summarize_conversation(
             model=settings.CLAUDE_MODEL,
             system="Return only valid JSON. Preserve user-stated facts exactly.",
             prompt=_SUMMARY_PROMPT.format(transcript=transcript[:12000]),
+            timeout_seconds=settings.CLAUDE_TIMEOUT_SECONDS,
         )
         raw_text = generated["text"]
         summary_usage = generated["usage"]

@@ -1,5 +1,6 @@
 """Minimal Anthropic Messages client using only the Python standard library."""
 import json
+import logging
 import ssl
 import time
 from typing import Callable
@@ -10,6 +11,70 @@ try:
     import certifi
 except ImportError:  # Local minimal test environments can use the OS CA store.
     certifi = None
+
+logger = logging.getLogger(__name__)
+
+
+def _request_json(
+    request: Request,
+    *,
+    timeout_seconds: float,
+    operation: str,
+    model: str,
+    step: int | None = None,
+) -> dict:
+    """Call Anthropic while recording safe timing and response diagnostics."""
+    started = time.perf_counter()
+    payload_bytes = len(request.data or b"")
+    context = {
+        "provider": "claude",
+        "operation": operation,
+        "model": model,
+        "step": step,
+        "timeoutSeconds": timeout_seconds,
+        "requestBytes": payload_bytes,
+    }
+    ssl_context = ssl.create_default_context(
+        cafile=certifi.where() if certifi else None
+    )
+
+    try:
+        with urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            logger.info(
+                "Claude request completed %s",
+                {
+                    **context,
+                    "status": getattr(response, "status", None),
+                    "anthropicRequestId": getattr(response, "headers", {}).get("request-id"),
+                    "durationMs": round((time.perf_counter() - started) * 1000),
+                },
+            )
+            return result
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        logger.warning(
+            "Claude request returned HTTP error %s",
+            {
+                **context,
+                "status": error.code,
+                "anthropicRequestId": error.headers.get("request-id"),
+                "durationMs": round((time.perf_counter() - started) * 1000),
+                "errorBody": body[:500],
+            },
+        )
+        raise RuntimeError(f"Claude HTTP {error.code}: {body[:500]}") from error
+    except Exception as error:
+        logger.warning(
+            "Claude request failed before receiving a response %s",
+            {
+                **context,
+                "errorType": type(error).__name__,
+                "error": str(error)[:500],
+                "durationMs": round((time.perf_counter() - started) * 1000),
+            },
+        )
+        raise
 
 
 def _normalize_schema(value):
@@ -48,6 +113,7 @@ def run_claude_agent(
     on_trace_step: Callable[[dict], None] | None = None,
     force_tool_name: str | None = None,
     max_steps: int = 4,
+    timeout_seconds: float = 45,
 ) -> dict:
     selected_tools = (
         [tool for tool in tools if tool["name"] == force_tool_name]
@@ -105,14 +171,13 @@ def run_claude_agent(
         )
         model_started = time.perf_counter()
         try:
-            ssl_context = ssl.create_default_context(
-                cafile=certifi.where() if certifi else None
+            result = _request_json(
+                request,
+                timeout_seconds=timeout_seconds,
+                operation="coach",
+                model=model,
+                step=step + 1,
             )
-            with urlopen(request, timeout=45, context=ssl_context) as response:
-                result = json.loads(response.read().decode("utf-8"))
-        except HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Claude HTTP {error.code}: {body[:500]}") from error
         finally:
             trace_step = {
                 "kind": "llm",
@@ -179,7 +244,15 @@ def run_claude_agent(
     return {"text": "", "usage": usage, "traceSteps": trace_steps}
 
 
-def generate_claude_text(*, api_key: str, model: str, system: str, prompt: str, max_tokens: int = 900) -> dict:
+def generate_claude_text(
+    *,
+    api_key: str,
+    model: str,
+    system: str,
+    prompt: str,
+    max_tokens: int = 900,
+    timeout_seconds: float = 45,
+) -> dict:
     """Small no-tools Claude call used by background jobs such as summarization."""
     payload = {
         "model": model,
@@ -197,13 +270,12 @@ def generate_claude_text(*, api_key: str, model: str, system: str, prompt: str, 
         },
         method="POST",
     )
-    ssl_context = ssl.create_default_context(cafile=certifi.where() if certifi else None)
-    try:
-        with urlopen(request, timeout=45, context=ssl_context) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Claude HTTP {error.code}: {body[:500]}") from error
+    result = _request_json(
+        request,
+        timeout_seconds=timeout_seconds,
+        operation="summary",
+        model=model,
+    )
     text_value = "\n".join(
         block.get("text", "") for block in result.get("content", []) if block.get("type") == "text"
     ).strip()

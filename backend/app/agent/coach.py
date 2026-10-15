@@ -551,6 +551,7 @@ def run_chat(
                 on_trace_step=trace_steps.append,
                 force_tool_name=required_tool_name,
                 max_steps=MAX_STEPS,
+                timeout_seconds=settings.CLAUDE_TIMEOUT_SECONDS,
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
@@ -620,7 +621,6 @@ def run_chat(
                 parts=[types.Part.from_function_response(
                     name=call.name,
                     response={"result": feedback},
-                    id=call.id,
                 )],
             ))
 

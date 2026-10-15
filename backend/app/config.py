@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     FIREBASE_PROJECT_ID: str = "fitki-505410"
     CLAUDE_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-sonnet-5-5"
+    CLAUDE_TIMEOUT_SECONDS: float = 20.0
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.7-flash"
