@@ -4,6 +4,7 @@ Phase 2a: stateless (only the latest message is sent, like the current Node
 app). Conversation memory + summarization arrive in Phase 2b.
 """
 import json
+import logging
 import re
 import time
 import uuid
@@ -29,6 +30,8 @@ from .workout_flow import (
     has_pending_workout_draft,
     is_explicit_workout_confirmation,
 )
+
+logger = logging.getLogger(__name__)
 
 # JIT tool: lets the model pull full detail behind a [Summary ID: xxx] reference.
 EXPAND_DECL = {
@@ -523,15 +526,30 @@ def run_chat(
             return str(result) if result else "done"
         except Exception as error:
             tool_status = "error"
-            memory.write_tool_log(session, user.id, thread_id, name, args, None, "failed", str(error))
+            error_message = str(error)
+            memory.write_tool_log(session, user.id, thread_id, name, args, None, "failed", error_message)
+            logger.error(
+                "AI tool failed %s",
+                {
+                    "event": "ai_tool_error",
+                    "requestId": request_id,
+                    "threadId": thread_id,
+                    "tool": name,
+                    "errorType": type(error).__name__,
+                    "error": error_message[:500],
+                },
+            )
             return f"error: {error}"
         finally:
-            trace_steps.append({
+            tool_trace = {
                 "kind": "tool",
                 "name": name,
                 "durationMs": round((time.perf_counter() - tool_started) * 1000),
                 "status": tool_status,
-            })
+            }
+            if tool_status == "error":
+                tool_trace["error"] = error_message[:500]
+            trace_steps.append(tool_trace)
 
     claude_failed = False
     if settings.CLAUDE_API_KEY:

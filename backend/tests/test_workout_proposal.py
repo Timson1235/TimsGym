@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from app.agent.workout_builder import build_workout_proposal
+from app.agent.tools import handle_start_workout_session
 from app.agent.workout_flow import (
     WORKOUT_CONFIRMATION_QUESTION,
     has_pending_workout_draft,
@@ -46,6 +48,21 @@ class WorkoutProposalTests(unittest.TestCase):
                 "title": "Empty",
                 "exercises": [],
             }, timestamp=123)
+
+    @patch("app.agent.tools.crud.save_user_exercise")
+    def test_adds_unknown_exercise_before_building_proposal(self, save_user_exercise):
+        database = {"exercises": []}
+        result = handle_start_workout_session(None, 1, database, {
+            "title": "Jump session",
+            "exercises": [{
+                "exerciseName": "CMJ",
+                "sets": [{"weight": 0, "reps": 3, "setType": "working"}],
+            }],
+        })
+
+        self.assertEqual(result["type"], "workout_proposed")
+        self.assertEqual(result["data"]["exercises"][0]["exerciseName"], "Countermovement Jumps")
+        save_user_exercise.assert_called_once()
 
     def test_requires_draft_and_explicit_confirmation(self):
         history = [Message("assistant", f"Hier ist dein Plan. {WORKOUT_CONFIRMATION_QUESTION}")]

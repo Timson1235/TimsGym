@@ -97,15 +97,20 @@ def get_or_create_user(session: Session, uid: str, email: str, display_name: Opt
         ))
         session.commit()
 
-    # Ensure the seed exercise library exists for this user.
-    has_exercise = session.exec(select(Exercise).where(Exercise.user_id == user.id)).first()
-    if has_exercise is None:
-        for ex in DEFAULT_SEED_EXERCISES:
-            session.add(Exercise(
-                id=f"{ex['id']}_{user.id}", user_id=user.id, name=ex["name"],
-                category=ex["category"], equipment=ex["equipment"],
-                instructions=ex.get("instructions"), is_custom=False, personal_record=None,
-            ))
+    # Add newly introduced defaults without overwriting custom exercises or history.
+    existing_exercises = session.exec(select(Exercise).where(Exercise.user_id == user.id)).all()
+    existing_names = {exercise.name.casefold() for exercise in existing_exercises}
+    added_default = False
+    for ex in DEFAULT_SEED_EXERCISES:
+        if ex["name"].casefold() in existing_names:
+            continue
+        session.add(Exercise(
+            id=f"{ex['id']}_{user.id}", user_id=user.id, name=ex["name"],
+            category=ex["category"], equipment=ex["equipment"],
+            instructions=ex.get("instructions"), is_custom=False, personal_record=None,
+        ))
+        added_default = True
+    if added_default:
         session.commit()
 
     return user

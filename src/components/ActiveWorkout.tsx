@@ -240,7 +240,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     onFinishWorkout(completedSession);
   };
 
-  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core'];
+  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Plyometrics'];
 
   const filteredExercises = exercises.filter((ex) => {
     const matchesCat = selectedCategory === 'All' || ex.category === selectedCategory;

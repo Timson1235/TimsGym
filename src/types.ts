@@ -6,6 +6,7 @@ export type MuscleCategory =
   | 'Arms' 
   | 'Core' 
   | 'Cardio' 
+  | 'Plyometrics'
   | 'Other';
 
 export type EquipmentType = 

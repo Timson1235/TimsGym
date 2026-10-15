@@ -11,7 +11,7 @@ from typing import Any, Optional
 from sqlmodel import Session
 
 from .. import crud
-from .exercise_identity import resolve_exercise
+from .exercise_identity import ALIASES, normalize_exercise_name, resolve_exercise
 from .workout_builder import build_workout_proposal
 
 
@@ -89,6 +89,8 @@ TOOL_DECLARATIONS = [
                         "type": "OBJECT",
                         "properties": {
                             "exerciseName": {"type": "STRING", "description": "Exact exercise name from the library when possible"},
+                            "category": {"type": "STRING", "description": "Optional muscle or movement category for a new exercise, e.g. Plyometrics"},
+                            "equipment": {"type": "STRING", "description": "Optional equipment, e.g. Bodyweight, Barbell, Dumbbell, Cable, Machine, or Other"},
                             "notes": {"type": "STRING", "description": "Exercise-specific cues, rest time, or safety note"},
                             "sets": {
                                 "type": "ARRAY",
@@ -283,6 +285,36 @@ def _now_id(prefix: str) -> str:
 
 
 def handle_start_workout_session(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
+    # The model may propose a valid exercise that is not in this user's library yet.
+    # Add it once, then build the proposal against the canonical persisted record.
+    for planned in args.get("exercises") or []:
+        supplied_name = (planned.get("exerciseName") or "").strip()
+        if not supplied_name:
+            continue
+        match, _ = resolve_exercise(db.get("exercises", []), supplied_name)
+        if match:
+            continue
+
+        canonical_name = ALIASES.get(normalize_exercise_name(supplied_name), supplied_name)
+        category = planned.get("category") or (
+            "Plyometrics" if "jump" in normalize_exercise_name(canonical_name)
+            or "sprung" in normalize_exercise_name(canonical_name)
+            else "Other"
+        )
+        equipment = planned.get("equipment") or (
+            "Bodyweight" if category == "Plyometrics" else "Other"
+        )
+        new_exercise = {
+            "id": _now_id("ex_ai"),
+            "name": canonical_name,
+            "category": category,
+            "equipment": equipment,
+            "instructions": planned.get("notes") or "Added from an AI workout proposal.",
+            "isCustom": True,
+        }
+        crud.save_user_exercise(session, user_id, new_exercise)
+        db.setdefault("exercises", []).append(new_exercise)
+
     return {"type": "workout_proposed", "data": build_workout_proposal(db, args)}
 
 

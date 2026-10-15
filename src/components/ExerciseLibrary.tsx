@@ -32,7 +32,7 @@ export const ExerciseLibrary: React.FC<ExerciseLibraryProps> = ({
   const [customEquipment, setCustomEquipment] = useState<EquipmentType>('Dumbbell');
   const [customInstructions, setCustomInstructions] = useState('');
 
-  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Cardio'];
+  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Cardio', 'Plyometrics'];
 
   const filteredExercises = exercises
     .filter((ex) => {

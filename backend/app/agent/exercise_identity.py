@@ -24,6 +24,13 @@ ALIASES = {
     "kabel bizeps": "Bizeps Kabel",
     "kabel seitheben": "Kabel-Seitheben",
     "pallof press kabelzug": "Pallof Press",
+    "box jump": "Box Jumps",
+    "box jumps": "Box Jumps",
+    "countermovement jump": "Countermovement Jumps",
+    "countermovement jumps": "Countermovement Jumps",
+    "cmj": "Countermovement Jumps",
+    "vertical jump": "Countermovement Jumps",
+    "sprung": "Countermovement Jumps",
 }
 
 

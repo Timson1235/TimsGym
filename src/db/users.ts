@@ -67,6 +67,22 @@ const DEFAULT_SEED_EXERCISES: Omit<Exercise, 'personalRecord'>[] = [
     equipment: "Cable",
     instructions: "Keep elbows fixed by torso, extend arms down and pull rope ends apart at bottom for full tricep lock.",
     isCustom: false,
+  },
+  {
+    id: "ex_9",
+    name: "Box Jumps",
+    category: "Plyometrics",
+    equipment: "Bodyweight",
+    instructions: "Jump onto a stable box with a soft landing, stand tall, and step down safely.",
+    isCustom: false,
+  },
+  {
+    id: "ex_10",
+    name: "Countermovement Jumps",
+    category: "Plyometrics",
+    equipment: "Bodyweight",
+    instructions: "Dip quickly, swing the arms, and jump explosively. Land softly and reset between repetitions.",
+    isCustom: false,
   }
 ];
 

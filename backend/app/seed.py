@@ -19,6 +19,10 @@ DEFAULT_SEED_EXERCISES = [
      "instructions": "Stand shoulder-width apart, curl weight up keeping elbows pinned to sides, squeeze peak contraction."},
     {"id": "ex_8", "name": "Tricep Rope Pushdown", "category": "Arms", "equipment": "Cable",
      "instructions": "Keep elbows fixed by torso, extend arms down and pull rope ends apart at bottom for full tricep lock."},
+    {"id": "ex_9", "name": "Box Jumps", "category": "Plyometrics", "equipment": "Bodyweight",
+     "instructions": "Jump onto a stable box with a soft landing, stand tall, and step down safely."},
+    {"id": "ex_10", "name": "Countermovement Jumps", "category": "Plyometrics", "equipment": "Bodyweight",
+     "instructions": "Dip quickly, swing the arms, and jump explosively. Land softly and reset between repetitions."},
 ]
 
 DEFAULT_TEMPLATES = [
