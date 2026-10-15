@@ -277,10 +277,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     <div className="font-sans">
       
       {/* Main Grid: Interactive Chat + Quick Commands */}
-      <div className="app-workspace overflow-hidden">
-        
+      <div className="overflow-hidden bg-white/80">
+
         {/* Left 2-Cols: Pastel Light AI Chat Workspace */}
-        <div className="flex h-[min(48rem,calc(100dvh-12rem))] min-h-80 flex-col">
+        <div className="flex h-[calc(100dvh-9rem)] min-h-80 flex-col md:h-[calc(100dvh-4rem)]">
           
           {/* Chat Stream Header - Light Theme */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/70 px-4 py-3 sm:px-5">

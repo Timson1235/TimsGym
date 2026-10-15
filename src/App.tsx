@@ -229,7 +229,9 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="mx-auto max-w-7xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 md:pb-12 lg:px-8">
+      <main className={activeTab === 'ai-coach'
+        ? "w-full px-0 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-0 md:pb-0"
+        : "mx-auto max-w-7xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 md:pb-12 lg:px-8"}>
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
             key={activeTab}
