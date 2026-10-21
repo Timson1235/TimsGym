@@ -33,6 +33,11 @@ export const AITraceDetails: React.FC<{ trace: AITrace; dark?: boolean }> = ({
       </summary>
 
       <div className="mt-2 space-y-1.5">
+        {trace.providerFallback && (
+          <div className="text-xs text-amber-700">
+            {trace.providerFallback.from} → {trace.providerFallback.to}: {trace.providerFallback.reason === 'timeout' ? 'Zeitlimit erreicht' : 'Anbieterfehler'}
+          </div>
+        )}
         {trace.firstTextMs != null && (
           <div className="text-xs text-slate-500">Erster Text nach {formatDuration(trace.firstTextMs)}</div>
         )}

@@ -279,24 +279,25 @@ PLANNING (no active session)
   one plan, no menu. State total duration and what to cut first if time
   runs short.
 
-  WORKOUT CREATION — TEXT FIRST, THEN CARD:
-  1. DRAFT/REVISION: Write the complete workout in text, as described
-     above. Do not call start_workout_session in a turn where you write a
-     new or revised draft, unless the user asked for the plan and the card
-     in the same message. End the draft by asking whether to set it up,
-     e.g. "Soll ich dieses Workout so starten?"
-  2. CARD: As soon as the user agrees to the latest draft or asks to start
-     or train it — in any wording, also several messages later — call
-     start_workout_session. Copy every agreed exercise, set, rep, weight,
-     set type and note exactly into the tool, including every later
-     correction. Never replace mixed set schemes with defaults. The card
-     starts nothing; the user starts the workout with its button.
-  3. If the user wants to train but no plan exists in this conversation
-     yet, or asks for changes, write or revise the draft first (step 1).
-  4. Calling start_workout_session again replaces the previous card. Do it
-     whenever the user asks for the card again.
-  5. Only say a card is ready after start_workout_session succeeded in this
-     turn.
+  WORKOUT CREATION — SHOW THE START BUTTON WITH THE PROPOSAL:
+  1. When the user asks for a new workout, a repeat, or a revised workout,
+     retrieve the relevant history, prepare ONE complete structured plan,
+     and call start_workout_session IN THAT SAME TURN. Do not require a
+     separate chat confirmation before showing the start button.
+  2. The tool creates only a preview/start button. It does not start a
+     workout. The user explicitly starts it by clicking Workout starten.
+     Therefore, proposing a complete workout already authorizes this tool.
+  3. Explain the proposed workout in your reply, with the same exercises,
+     sets, reps, weights, types and notes as the tool. End by inviting the
+     user to click Workout starten or request changes, not by asking for
+     another chat confirmation. Never claim the session has started.
+  4. Revisions replace the previous proposal: call the tool again with
+     the complete revised plan. Also regenerate the card when requested
+     for a plan from earlier in the conversation, retaining corrections.
+  5. Only show a proposal when enough information exists to make it
+     concrete. General advice or an essential unresolved question does
+     not require a workout card. Only claim a button is ready after the
+     tool succeeded in this turn.
 
   MULTI-ACTION REQUESTS:
   If one message requests multiple actions, execute every required tool in
@@ -396,7 +397,7 @@ If a swap creates a real problem — same muscle twice, main lift after
 accessories — say it in one sentence, then adapt anyway.
 
 ════ TOOLS ════
-- start_workout_session   show the workout card once the user agrees to the text draft
+- start_workout_session   show a preview/start button with every complete workout proposal
 - log_set                 every set, during the session
 - correct_log             fix an earlier entry, on explicit instruction
 - get_exercise_history    any question about past loads for one lift
@@ -588,8 +589,9 @@ def run_chat(
                 actions_executed.append(result)
 
             if name == "start_workout_session":
-                return ("The exact confirmed workout is now shown in the confirmation card. "
-                        "Tell the user to review the card and press Workout starten.")
+                return ("The proposed workout now has a preview/start button. No workout has started. "
+                        "Explain this exact plan and invite the user to click Workout starten or request changes. "
+                        "Do not ask for a separate chat confirmation.")
             if name == "log_set":
                 return (f"Set logged: {args.get('exercise_name')} {args.get('weight')}kg x {args.get('reps')} "
                         f"({args.get('set_type', 'working')}). Confirm to user in 1 compact line and name next block.")
@@ -632,6 +634,7 @@ def run_chat(
             trace_steps.append(tool_trace)
 
     claude_failed = False
+    provider_fallback = None
     if settings.CLAUDE_API_KEY:
         claude_messages = [
             {"role": "user" if item.role == "user" else "assistant", "content": item.content}
@@ -663,7 +666,12 @@ def run_chat(
                 reply_text = "Die abschließende KI-Antwort ist fehlgeschlagen. Änderungen könnten bereits gespeichert sein. Bitte prüfe den aktuellen Stand, bevor du die Anfrage wiederholst."
             elif not _client:
                 reply_text = "Der KI-Coach konnte die Anfrage nicht abschließen. Bitte versuche es später erneut."
-            emit({"type": "status", "message": "Trying the fallback provider…" if claude_failed and _client else "Finishing your request…"})
+            if claude_failed and _client:
+                reason = "timeout" if isinstance(error, TimeoutError) or "timed out" in str(error).lower() else "provider_error"
+                provider_fallback = {"from": "claude", "to": "gemini", "reason": reason}
+                emit({"type": "status", "message": "Claude took too long; trying Gemini…" if reason == "timeout" else "Claude is unavailable; trying Gemini…"})
+            else:
+                emit({"type": "status", "message": "Finishing your request…"})
             logger.warning("Claude coach failed (%s); fallback=%s", type(error).__name__, claude_failed)
 
     for step_index in range(MAX_STEPS if (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
@@ -799,6 +807,7 @@ def run_chat(
         "persistenceMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "persistence"),
         "slowestStep": slowest,
         "firstTextMs": first_text_ms,
+        "providerFallback": provider_fallback,
         "toolsOffered": [declaration["name"] for declaration in available_tools],
         "steps": trace_steps,
     }

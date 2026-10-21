@@ -158,6 +158,7 @@ export interface AITrace {
   totalMs: number;
   roundTripMs?: number;
   firstTextMs?: number | null;
+  providerFallback?: { from: string; to: string; reason: string } | null;
   agentSteps: number;
   modelMs: number;
   toolMs: number;

@@ -249,6 +249,7 @@ def run_claude_agent(
             method="POST",
         )
         model_started = time.perf_counter()
+        request_error = None
         try:
             if on_event:
                 result = _request_stream(
@@ -262,6 +263,9 @@ def run_claude_agent(
                 )
             if result.get("stop_reason") == "max_tokens":
                 raise RuntimeError("Claude response truncated; tool arguments were not executed")
+        except Exception as error:
+            request_error = type(error).__name__
+            raise
         finally:
             trace_step = {
                 "kind": "llm",
@@ -269,7 +273,10 @@ def run_claude_agent(
                 "durationMs": round((time.perf_counter() - model_started) * 1000),
                 "step": step + 1,
                 "provider": "claude",
+                "status": "error" if request_error else "success",
             }
+            if request_error:
+                trace_step["errorType"] = request_error
             trace_steps.append(trace_step)
             if on_trace_step:
                 on_trace_step(trace_step)

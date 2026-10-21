@@ -77,7 +77,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "start_workout_session",
-        "description": "Show the user a workout card with the structured workout; the user starts it with the card's 'Workout starten' button, so calling this never starts a session by itself. Call it once the user agrees to a workout plan you wrote in text in this conversation, in any wording, also when they ask to start or train a plan from several messages earlier. Use the latest version of that plan including every later correction. Calling it again replaces the previous card.",
+        "description": "Show a preview/start button for a complete proposed workout in the same turn as the proposal or revision. Do not wait for a separate chat confirmation. Calling this tool never starts a session: the user explicitly starts it by clicking Workout starten. General training advice without a complete workout does not require this tool. Preserve every proposed exercise, set, rep, weight, set type and note. Calling it again replaces the previous proposal.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -85,7 +85,7 @@ TOOL_DECLARATIONS = [
                 "sessionNotes": {"type": "STRING", "description": "Optional warm-up, cooldown, and session-wide guidance"},
                 "exercises": {
                     "type": "ARRAY",
-                    "description": "Every exercise with every set exactly as agreed in the text draft",
+                    "description": "Every exercise with every set exactly as prescribed in this proposal",
                     "items": {
                         "type": "OBJECT",
                         "properties": {

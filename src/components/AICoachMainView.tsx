@@ -256,7 +256,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       }
 
       const actions = response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : []);
-      const workoutProposal = actions.find((action: any) => action.type === 'workout_proposed');
+      const workoutProposal = [...actions].reverse().find((action: any) => action.type === 'workout_proposed');
 
       for (const action of actions) {
         setLastAction(action);

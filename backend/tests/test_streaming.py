@@ -80,6 +80,15 @@ class ProviderStreamingTests(unittest.TestCase):
         self.assertNotEqual(a[1], b[1])
         self.assertNotIn('cache_control', _system_blocks(first, False)[0])
 
+    def test_timeout_is_visible_in_model_trace(self):
+        trace = []
+        with patch('app.agent.claude_provider._request_stream', side_effect=TimeoutError('timed out')):
+            with self.assertRaises(TimeoutError):
+                run_claude_agent(api_key='test', model='test', system_instruction='Rules', messages=[],
+                                 tools=[], handle_tool=Mock(), on_event=lambda e: None, on_trace_step=trace.append)
+        self.assertEqual(trace[0]['status'], 'error')
+        self.assertEqual(trace[0]['errorType'], 'TimeoutError')
+
     def test_provider_error_event_is_not_returned_as_success(self):
         with patch('app.agent.claude_provider.urlopen', return_value=StreamResponse([event('error', error={'type':'overloaded_error'})])):
             with self.assertRaisesRegex(RuntimeError, 'overloaded_error'):

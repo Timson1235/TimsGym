@@ -71,6 +71,27 @@ class CoachToolSelectionTests(unittest.TestCase):
         self.assertIsNone(updated["rpe"])
         self.assertEqual(result["actionsExecuted"][0]["type"], "set_logged")
 
+    def test_timeout_fallback_records_the_reason(self):
+        def timed_out(**kwargs):
+            raise TimeoutError("The read operation timed out")
+        response = SimpleNamespace(function_calls=[], text="Fallback reply", usage_metadata=None)
+        with patch.object(coach, "_client", object()), \
+                patch.object(coach, "_generate_with_retry", return_value=response):
+            result = self.run_chat("Question", [], timed_out)
+        self.assertEqual(result["trace"]["providerFallback"], {
+            "from": "claude", "to": "gemini", "reason": "timeout",
+        })
+
+    def test_complete_proposal_can_include_start_button_without_prior_confirmation(self):
+        def proposing_agent(**kwargs):
+            kwargs["handle_tool"]("start_workout_session", WORKOUT_ARGS, "proposal")
+            return {"text": "Hier ist dein Vorschlag. Klicke Workout starten.", "usage": None}
+        result = self.run_chat("Schlage mir ein Workout vor", [], proposing_agent)
+        self.assertEqual(result["actionExecuted"]["type"], "workout_proposed")
+        self.assertEqual(result["actionExecuted"]["data"]["title"], WORKOUT_ARGS["title"])
+        self.assertIsNone(result["activeWorkoutState"])
+        self.assertFalse(result["actionExecuted"]["data"]["isCompleted"])
+
     def test_start_tool_is_offered_without_a_recognized_confirmation(self):
         offered = {}
 
