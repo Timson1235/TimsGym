@@ -206,6 +206,7 @@ export default function App() {
 
   const content = activeTab === 'ai-coach' ? (
     <AICoachMainView
+      key={currentUser?.uid || 'guest'}
       db={db}
       activeWorkout={activeWorkout}
       onUpdateActiveWorkout={(updated) => setActiveWorkout((current) => current?.id === updated.id ? updated : current)}

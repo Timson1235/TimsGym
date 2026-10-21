@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Sparkles, Send, Bot, User, Loader2, Dumbbell, 
+  Sparkles, Send, Bot, User, Loader2,
   CheckCircle2, Play, ArrowRight, Zap,
   Trash2, Plus, MessagesSquare
 } from 'lucide-react';
-import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
+import { DatabaseState, WorkoutSession, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
 import {
   createAIChatSession,
   deleteAIChatSession,
@@ -14,6 +14,7 @@ import {
   sendAIChatMessage,
 } from '../lib/api';
 import { auth } from '../lib/firebase';
+import { readChatCache, cacheChatSessions, cacheChatHistory, selectCachedChat, removeCachedChat } from '../lib/chatCache';
 import { ChatMarkdown } from './ChatMarkdown';
 import { AITraceDetails } from './AITraceDetails';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -42,27 +43,17 @@ const DEFAULT_WELCOME_MSG: AIChatMessage = {
   timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 };
 
-function formatSetScheme(sets: WorkoutSet[]): string {
-  const groups: Array<{ count: number; set: WorkoutSet }> = [];
-  for (const set of sets) {
-    const previous = groups[groups.length - 1];
-    if (
-      previous
-      && previous.set.weight === set.weight
-      && previous.set.reps === set.reps
-      && previous.set.type === set.type
-    ) {
-      previous.count += 1;
-    } else {
-      groups.push({ count: 1, set });
-    }
-  }
+function attachWorkoutProposal(messages: AIChatMessage[], workout: WorkoutSession | null): AIChatMessage[] {
+  if (!workout) return messages;
+  const lastAssistantIndex = messages.reduce(
+    (lastIndex, message, index) => message.role === 'assistant' ? index : lastIndex,
+    -1,
+  );
+  if (lastAssistantIndex < 0) return messages;
 
-  return groups.map(({ count, set }) => {
-    const load = set.weight > 0 ? ` @ ${set.weight} kg` : ' Körpergewicht';
-    const type = set.type === 'warmup' ? ' (WU)' : '';
-    return `${count} × ${set.reps}${load}${type}`;
-  }).join(' + ');
+  return messages.map((message, index) => index === lastAssistantIndex
+    ? { ...message, suggestedAction: { type: 'workout_proposed' as const, workout } }
+    : message);
 }
 
 export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
@@ -74,81 +65,126 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   onSelectTab,
   initialPrompt = '',
 }) => {
-  const [messages, setMessages] = useState<AIChatMessage[]>([DEFAULT_WELCOME_MSG]);
+  const cacheOwner = auth.currentUser?.uid || 'guest';
+  const [initialCache] = useState(() => readChatCache(cacheOwner));
+  const initialThread = initialCache.activeThreadId || initialCache.sessions[0]?.id || '';
+  const [messages, setMessages] = useState<AIChatMessage[]>(() =>
+    [DEFAULT_WELCOME_MSG, ...(initialCache.histories[initialThread] || [])]);
 
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [streamStatus, setStreamStatus] = useState('Thinking through your request…');
   const [isSwitchingThread, setIsSwitchingThread] = useState(false);
   const [threadError, setThreadError] = useState('');
   const threadRequest = useRef(0);
   const [lastAction, setLastAction] = useState<any>(null);
-  const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
   const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const [accountUsage, setAccountUsage] = useState<AIUsageSummary | null>(null);
-  const [chatSessions, setChatSessions] = useState<AIChatSession[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string>('');
+  const [chatSessions, setChatSessions] = useState<AIChatSession[]>(initialCache.sessions);
+  const [activeThreadId, setActiveThreadId] = useState<string>(initialThread);
+  const loadedThread = useRef(initialCache.histories[initialThread] !== undefined ? initialThread : '');
+  const sessionsRequest = useRef(0);
   const [isDeleteChatDialogOpen, setIsDeleteChatDialogOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
   const reduceMotion = useReducedMotion();
 
+  const decorateHistory = (history: AIChatMessage[], threadId: string) => {
+    let savedProposal: WorkoutSession | null = null;
+    try {
+      const saved = localStorage.getItem(`timsgym:proposal:${cacheOwner}:${threadId}`);
+      savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
+    } catch { /* Proposal storage is optional. */ }
+    return [DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)];
+  };
+
   const loadThread = async (threadId: string) => {
     const request = ++threadRequest.current;
-    setIsSwitchingThread(true);
-    setThreadError('');
-    try {
-    const history = await fetchAIChatHistory(threadId);
-    if (request !== threadRequest.current) return;
-    setMessages([DEFAULT_WELCOME_MSG, ...history]);
+    const cached = readChatCache(cacheOwner).histories[threadId];
+    loadedThread.current = cached !== undefined ? threadId : '';
     setActiveThreadId(threadId);
-    localStorage.setItem('active_ai_thread_id', threadId);
+    selectCachedChat(cacheOwner, threadId);
+    setMessages(decorateHistory(cached || [], threadId));
+    setIsSwitchingThread(cached === undefined);
+    setThreadError('');
     setLastAction(null);
-    try {
-      const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${threadId}`);
-      setProposedWorkout(saved ? JSON.parse(saved) : null);
-    } catch { setProposedWorkout(null); }
     setSessionUsage(EMPTY_AI_USAGE);
+    try {
+      const history = await fetchAIChatHistory(threadId);
+      if (request !== threadRequest.current) return;
+      loadedThread.current = threadId;
+      const decorated = decorateHistory(history, threadId);
+      cacheChatHistory(cacheOwner, threadId, decorated);
+      setMessages(decorated);
     } catch {
-      if (request === threadRequest.current) setThreadError('Could not load this chat. Please try again.');
+      if (request === threadRequest.current) {
+        setThreadError(cached !== undefined
+          ? 'Showing saved messages. Could not refresh this chat.'
+          : 'Could not load this chat. Please try again.');
+      }
     } finally {
       if (request === threadRequest.current) setIsSwitchingThread(false);
     }
   };
 
   const dismissProposal = () => {
-    setProposedWorkout(null);
+    setMessages((current) => current.map((message) => ({
+      ...message,
+      suggestedAction: message.suggestedAction?.type === 'workout_proposed'
+        ? undefined
+        : message.suggestedAction,
+    })));
     try {
       localStorage.removeItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`);
     } catch { /* Storage may be unavailable. */ }
   };
 
   const refreshSessions = async () => {
-    const sessions = await fetchAIChatSessions();
-    setChatSessions(sessions);
-    return sessions as AIChatSession[];
+    const request = ++sessionsRequest.current;
+    const sessions = await fetchAIChatSessions() as AIChatSession[];
+    if (request === sessionsRequest.current) {
+      cacheChatSessions(cacheOwner, sessions);
+      setChatSessions(sessions);
+    }
+    return sessions;
   };
 
   useEffect(() => {
     let cancelled = false;
-    fetchAIChatSessions()
-      .then(async (sessions: AIChatSession[]) => {
-        if (cancelled || sessions.length === 0) return;
-        setChatSessions(sessions);
-        const saved = localStorage.getItem('active_ai_thread_id');
-        const selected = sessions.find((item) => item.id === saved) || sessions[0];
-        const history = await fetchAIChatHistory(selected.id);
-        if (!cancelled) {
-          setActiveThreadId(selected.id);
-          try {
-            const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${selected.id}`);
-            setProposedWorkout(saved ? JSON.parse(saved) : null);
-          } catch { setProposedWorkout(null); }
-          setMessages([DEFAULT_WELCOME_MSG, ...history]);
-        }
-      })
-      .catch((error) => console.error('Failed to load chat sessions:', error));
-    return () => { cancelled = true; };
+    // Revalidate the selected cached history concurrently with the chat list.
+    if (initialThread) void loadThread(initialThread);
+    const initialHistoryRequest = threadRequest.current;
+    void refreshSessions().then((sessions) => {
+      if (cancelled || threadRequest.current !== initialHistoryRequest) return;
+      if (sessions.length === 0) {
+        ++threadRequest.current;
+        loadedThread.current = '';
+        setActiveThreadId('');
+        setMessages([DEFAULT_WELCOME_MSG]);
+        setIsSwitchingThread(false);
+        return;
+      }
+      const selected = sessions.find((item) => item.id === initialThread) || sessions[0];
+      if (!initialThread || selected.id !== initialThread) void loadThread(selected.id);
+    }).catch(() => {
+      if (!cancelled && threadRequest.current === initialHistoryRequest) {
+        setThreadError('Could not refresh chats. Saved conversations remain available.');
+      }
+    });
+    return () => {
+      cancelled = true;
+      ++threadRequest.current;
+      ++sessionsRequest.current;
+    };
   }, []);
+
+  // Persist visible replies and proposal dismissals, but not an unfinished send.
+  useEffect(() => {
+    if (activeThreadId && loadedThread.current === activeThreadId && !isLoading && !isSwitchingThread) {
+      cacheChatHistory(cacheOwner, activeThreadId, messages);
+    }
+  }, [messages, activeThreadId, isLoading, isSwitchingThread, cacheOwner]);
 
   useEffect(() => {
     fetchAIUsageSummary()
@@ -167,18 +203,21 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     if (messages.length > 1 || isLoading) {
       scrollToBottom();
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, streamingText]);
 
   useEffect(() => {
-    if (initialPrompt && initialPrompt !== handledPromptRef.current) {
+    if (initialPrompt && activeThreadId && !isSwitchingThread && initialPrompt !== handledPromptRef.current) {
       handledPromptRef.current = initialPrompt;
       handleSendMessage(initialPrompt);
     }
-  }, [initialPrompt]);
+  }, [initialPrompt, activeThreadId, isSwitchingThread]);
 
   const handleSendMessage = async (textToSend?: string) => {
     const text = textToSend || inputMessage;
-    if (!text.trim() || isLoading || isSwitchingThread) return;
+    if (!text.trim() || isLoading || isSwitchingThread || !activeThreadId) return;
+    // A background history response must never overwrite a new message.
+    const request = ++threadRequest.current;
+    setThreadError('');
 
     const userMsg: AIChatMessage = {
       id: `msg_${Date.now()}`,
@@ -190,9 +229,19 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     if (!textToSend) setInputMessage('');
     setIsLoading(true);
+    setStreamingText('');
+    setStreamStatus('Connecting to the coach…');
 
     try {
-      const response = await sendAIChatMessage(text, activeWorkout, activeThreadId);
+      const response = await sendAIChatMessage(text, activeWorkout, activeThreadId, (event) => {
+        if (request !== threadRequest.current) return;
+        if (event.type === 'delta') {
+          setStreamingText((current) => current + event.text);
+          setStreamStatus('Writing your answer…');
+        } else if (event.type === 'reset') setStreamingText('');
+        else if (event.type === 'status') setStreamStatus(event.message);
+      });
+      if (request !== threadRequest.current) return;
 
       if (response.usage) {
         setSessionUsage((current) => mergeAIUsage(current, response.usage));
@@ -206,11 +255,13 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         onUpdateActiveWorkout(response.activeWorkoutState);
       }
 
-      for (const action of response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : [])) {
+      const actions = response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : []);
+      const workoutProposal = [...actions].reverse().find((action: any) => action.type === 'workout_proposed');
+
+      for (const action of actions) {
         setLastAction(action);
         if (action.type === 'workout_proposed') {
           // Show a proposal card with a confirm button — do NOT auto-start.
-          setProposedWorkout(action.data);
           try {
             localStorage.setItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`, JSON.stringify(action.data));
           } catch { /* The current card remains usable when browser storage is full. */ }
@@ -225,33 +276,42 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         toolsUsed: response.toolsUsed,
         usage: response.usage,
         trace: response.trace,
+        suggestedAction: workoutProposal
+          ? { type: 'workout_proposed', workout: workoutProposal.data }
+          : undefined,
       };
 
       if (response.historyCompacted && activeThreadId) {
         const activeHistory = await fetchAIChatHistory(activeThreadId);
-        setMessages([DEFAULT_WELCOME_MSG, ...activeHistory]);
+        if (request !== threadRequest.current) return;
+        setMessages(decorateHistory(activeHistory, activeThreadId));
       } else {
         setMessages((prev) => [...prev, assistantMsg]);
       }
-      await refreshSessions();
+      void refreshSessions().catch(() => setThreadError('Reply saved. Could not refresh the chat list.'));
       fetchAIUsageSummary()
         .then(setAccountUsage)
         .catch((error) => console.error('Failed to refresh account AI usage:', error));
     } catch (error) {
+      if (request !== threadRequest.current) return;
       console.error('Failed to communicate with AI Coach:', error);
       const errorMsg: AIChatMessage = {
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
-        content: "Der AI-Coach ist gerade nicht erreichbar. Bitte prüfe die Serververbindung und versuche es erneut.",
+        content: "Die Verbindung zum Coach wurde unterbrochen. Änderungen könnten bereits gespeichert sein. Lade den Chat neu und prüfe dein Workout, bevor du die Anfrage wiederholst.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
-      setIsLoading(false);
+      if (request === threadRequest.current) {
+        setIsLoading(false);
+        setStreamingText('');
+      }
     }
   };
 
   const handleNewChat = async () => {
+    ++threadRequest.current;
     try {
       const created = await createAIChatSession();
       await refreshSessions();
@@ -264,7 +324,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const handleDeleteChat = async () => {
     if (!activeThreadId) return;
     try {
+      ++threadRequest.current;
       await deleteAIChatSession(activeThreadId);
+      removeCachedChat(cacheOwner, activeThreadId);
+      setActiveThreadId('');
+      setMessages([DEFAULT_WELCOME_MSG]);
+      try { localStorage.removeItem(`timsgym:proposal:${cacheOwner}:${activeThreadId}`); } catch { /* Optional storage. */ }
       let sessions = await refreshSessions();
       if (sessions.length === 0) {
         const created = await createAIChatSession();
@@ -304,7 +369,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       <div className="overflow-hidden bg-white/80">
 
         {/* Left 2-Cols: Pastel Light AI Chat Workspace */}
-        <div className="flex h-[calc(100dvh-9rem)] min-h-80 flex-col md:h-[calc(100dvh-4rem)]">
+        <div className="flex h-[calc(100dvh-9rem)] min-h-80 flex-col overflow-hidden md:h-[calc(100dvh-4rem)]">
           
           {/* Chat Stream Header - Light Theme */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/70 px-4 py-3 sm:px-5">
@@ -393,6 +458,22 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     variant={msg.role === 'user' ? 'user' : 'light'}
                   />
 
+                  {msg.role === 'assistant'
+                    && msg.suggestedAction?.type === 'workout_proposed'
+                    && msg.suggestedAction.workout && (
+                    <button
+                      onClick={() => {
+                        const workout = msg.suggestedAction?.workout;
+                        if (!workout) return;
+                        dismissProposal();
+                        onStartWorkoutSession(workout);
+                      }}
+                      className="app-primary mt-3 flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
+                    >
+                      <Play className="h-3.5 w-3.5" /> Workout starten
+                    </button>
+                  )}
+
                   {msg.role === 'assistant' && msg.toolsUsed && msg.toolsUsed.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {msg.toolsUsed.map((t, i) => (
@@ -428,6 +509,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
             </motion.div>
             </AnimatePresence>
 
+            {isLoading && streamingText && (
+              <div className="flex gap-2.5 justify-start" aria-live="polite">
+                <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0">
+                  <Bot className="h-3.5 w-3.5" />
+                </div>
+                <div className="min-w-0 max-w-[90%] rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm leading-relaxed">
+                  <ChatMarkdown content={streamingText} />
+                </div>
+              </div>
+            )}
             {isLoading && (
               <div className="flex gap-2.5 justify-start">
                 <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0">
@@ -436,56 +527,14 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <div className="flex items-center gap-2 rounded-lg rounded-tl-none border border-slate-200 bg-white px-3.5 py-2 shadow-xs">
                   <Loader2 className="h-3.5 w-3.5 text-brand-600 animate-spin" />
                   <span className="text-xs text-slate-500 font-medium">
-                    Thinking through this...
+                    {streamStatus}
                   </span>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Workout Proposal Card — user confirms before it actually starts */}
-          <AnimatePresence>
-          {proposedWorkout && (
-            <motion.div
-              className="mx-4 mb-1 mt-2 rounded-lg border border-brand-200 bg-brand-50/70 p-3 shadow-sm"
-              initial={reduceMotion ? false : { opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
-              transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
-            >
-              <div className="flex items-center gap-1.5 mb-2 text-brand-800">
-                <Dumbbell className="h-4 w-4" />
-                <span className="text-sm font-semibold">Workout proposal: {proposedWorkout.title}</span>
-              </div>
-              <ul className="space-y-1 mb-3">
-                {proposedWorkout.exercises.map((ex, i) => (
-                  <li key={i} className="flex items-start justify-between gap-3 text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-200">
-                    <span className="font-medium">{ex.exerciseName}</span>
-                    <span className="text-right text-slate-500 font-mono leading-relaxed">{formatSetScheme(ex.sets)}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => { dismissProposal(); onStartWorkoutSession(proposedWorkout); }}
-                  className="app-primary flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold shadow-sm"
-                >
-                  <Play className="h-3.5 w-3.5" /> Workout starten
-                </button>
-                <button
-                  onClick={dismissProposal}
-                  className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  Verwerfen
-                </button>
-              </div>
-              <p className="mt-2 text-center text-xs text-slate-500">To change it, just tell me what to adjust.</p>
-            </motion.div>
-          )}
-
-          </AnimatePresence>
-
-          {/* Action Confirmation Banner (proposals use the card above instead) */}
+          {/* Action Confirmation Banner for non-workout actions */}
           {lastAction && lastAction.type !== 'workout_proposed' && (
             <div className="px-4 py-2 bg-brand-50 border-t border-b border-brand-200 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5 text-brand-800 font-medium">
@@ -537,7 +586,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 type="submit"
                 aria-label="Send message"
                 title="Send message"
-                disabled={!inputMessage.trim() || isLoading || isSwitchingThread}
+                disabled={!inputMessage.trim() || !activeThreadId || isLoading || isSwitchingThread}
                 className="app-icon-button app-primary shadow-sm disabled:opacity-40"
               >
                 {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

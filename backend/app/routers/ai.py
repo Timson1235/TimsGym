@@ -2,6 +2,7 @@
 import time
 import uuid
 
+from fastapi.responses import StreamingResponse
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlmodel import Session
 
@@ -9,6 +10,7 @@ from ..agent import coach
 from ..auth import current_user
 from ..db import get_session
 from ..memory import conversational as memory
+from ..streaming import stream_events
 from ..models import User
 from ..observability import read_user_usage_summary, update_round_trip_ms, write_ai_request_metric
 
@@ -87,12 +89,7 @@ def remove_chat_session(
     return {"success": True}
 
 
-@router.post("/chat")
-def chat(
-    payload: dict = Body(...),
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-):
+def _execute_chat(payload: dict, user: User, session: Session, on_event=None):
     request_id = str(uuid.uuid4())
     request_started = time.perf_counter()
     memory.ensure_default_chat_session(session, user.id)
@@ -107,6 +104,7 @@ def chat(
             active_workout_state=payload.get("activeWorkoutState"),
             request_id=request_id,
             thread_id=thread_id,
+            on_event=on_event,
         )
     except Exception as error:
         session.rollback()
@@ -142,6 +140,34 @@ def chat(
         tools_used=result.get("toolsUsed"),
     )
     return result
+
+
+@router.post("/chat")
+def chat(
+    payload: dict = Body(...),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    if not payload.get("stream"):
+        return _execute_chat(payload, user, session)
+
+    # Authenticate/authorize before sending HTTP 200 or starting any worker.
+    memory.ensure_default_chat_session(session, user.id)
+    thread_id = str(payload.get("threadId") or user.id)
+    if not memory.get_owned_chat_session(session, user.id, thread_id):
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    bind = session.get_bind()
+    identity = User(id=user.id, uid=user.uid, email=user.email)
+    session.rollback()  # Release the validation connection while the worker runs.
+
+    def work(emit):
+        with Session(bind) as worker_session:
+            return _execute_chat(payload, identity, worker_session, emit)
+
+    return StreamingResponse(
+        stream_events(work), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.patch("/metrics/roundtrip")

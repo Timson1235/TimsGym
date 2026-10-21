@@ -1,5 +1,7 @@
 import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
 import { auth } from './firebase';
+import { readChatStream, type ChatStreamEvent } from './chatStream';
+import { cacheChatHistory, removeCachedChat, readChatCache } from './chatCache';
 import { createGuestDatabase } from '../db/guest';
 
 const guestCacheKey = 'gym_db_cache:guest';
@@ -176,16 +178,19 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
   }
 }
 
-export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string) {
+export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string, onEvent?: (event: ChatStreamEvent) => void) {
   const requestStarted = performance.now();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, activeWorkoutState, threadId }),
+      body: JSON.stringify({ message, activeWorkoutState, threadId, stream: Boolean(onEvent) }),
     });
-    const payload = await res.json().catch(() => ({}));
+    if (onEvent && !res.ok) throw new Error(`Coach request failed (HTTP ${res.status})`);
+    const payload = res.headers.get('Content-Type')?.includes('text/event-stream') && onEvent
+      ? await readChatStream(res, onEvent)
+      : await res.json().catch(() => ({}));
     if (!res.ok) {
       console.error('AI Chat request failed:', res.status, payload.error);
       return {
@@ -209,6 +214,7 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
     return payload;
   } catch (error: any) {
     console.error('AI Chat Error:', error);
+    if (onEvent) throw error;
     return { reply: "Sorry, I couldn't reach the AI Coach right now. Please verify server connection." };
   }
 }
@@ -230,10 +236,16 @@ export async function fetchAIChatHistory(threadId?: string): Promise<AIChatMessa
 }
 
 export async function clearAIChatHistory(threadId?: string): Promise<void> {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
   const res = await fetch(`/api/ai/history${query}`, { method: 'DELETE', headers });
   if (!res.ok) throw new Error('Failed to clear AI chat history');
+  if (threadId) cacheChatHistory(owner, threadId, []);
+  else {
+    // Legacy callers omit the default thread ID: invalidate the account snapshot.
+    for (const id of Object.keys(readChatCache(owner).histories)) cacheChatHistory(owner, id, []);
+  }
 }
 
 export async function fetchAIChatSessions() {
@@ -256,12 +268,14 @@ export async function createAIChatSession(title = 'New chat') {
 }
 
 export async function deleteAIChatSession(threadId: string) {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const res = await fetch(`/api/ai/sessions/${encodeURIComponent(threadId)}`, {
     method: 'DELETE',
     headers,
   });
   if (!res.ok) throw new Error('Failed to delete AI chat session');
+  removeCachedChat(owner, threadId);
 }
 
 export async function fetchAIUsageSummary() {

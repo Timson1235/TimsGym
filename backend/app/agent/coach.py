@@ -1,14 +1,14 @@
 """The AI coach loop — ported from the /api/ai/chat handler in server.ts.
 
-Phase 2a: stateless (only the latest message is sent, like the current Node
-app). Conversation memory + summarization arrive in Phase 2b.
+Uses account-scoped training records, recent messages, and compressed history.
+Detailed training facts are retrieved through deterministic tools.
 """
 import json
 import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from zoneinfo import ZoneInfo
 
 from google import genai
@@ -54,13 +54,37 @@ def _is_billing_error(error: Exception) -> bool:
             or "insufficient credit" in message)
 
 
-def _generate_with_retry(client: genai.Client, model: str, contents: list, config: types.GenerateContentConfig):
+def _generate_with_retry(client: genai.Client, model: str, contents: list, config: types.GenerateContentConfig, on_event=None):
     last_err = None
     models = list(dict.fromkeys([model, COACH_FALLBACK_MODEL, COACH_LAST_RESORT_MODEL]))
     for candidate_model in models:
         try:
-            return client.models.generate_content(
-                model=candidate_model, contents=contents, config=config
+            if not on_event:
+                return client.models.generate_content(model=candidate_model, contents=contents, config=config)
+            on_event({"type": "reset"})
+            on_event({"type": "status", "message": "Thinking through your request…"})
+            parts, metadata, model_version, finish_reason = [], None, candidate_model, None
+            for chunk in client.models.generate_content_stream(model=candidate_model, contents=contents, config=config):
+                if chunk.usage_metadata:
+                    metadata = chunk.usage_metadata
+                model_version = chunk.model_version or model_version
+                if not chunk.candidates:
+                    continue
+                candidate = chunk.candidates[0]
+                finish_reason = candidate.finish_reason or finish_reason
+                for part in (candidate.content.parts if candidate.content else []) or []:
+                    parts.append(part)
+                    if part.text and not part.thought:
+                        on_event({"type": "delta", "text": part.text})
+            if finish_reason is None:
+                raise RuntimeError("Gemini stream ended before a finish reason")
+            if str(finish_reason).endswith("MAX_TOKENS"):
+                raise RuntimeError("Gemini response truncated; no tools executed for this round")
+            if not parts:
+                raise RuntimeError("Gemini stream ended without content")
+            return types.GenerateContentResponse(
+                candidates=[types.Candidate(content=types.Content(role="model", parts=parts), finish_reason=finish_reason)],
+                usage_metadata=metadata, model_version=model_version,
             )
         except Exception as e:
             last_err = e
@@ -92,7 +116,7 @@ MAIN_LIFT_KEYWORDS = [
 def _format_main_lifts(db: dict) -> str:
     """Extract and format recent 3-session progression for key compound movements."""
     exercises = db.get("exercises", [])
-    workouts = db.get("workouts", [])
+    workouts = [w for w in db.get("workouts", []) if w.get("isCompleted", True)]
 
     main_lifts = []
     seen = set()
@@ -216,7 +240,7 @@ Hauptlifte, letzte 3 Werte:
 {_format_main_lifts(db)}
 Alles Weitere über Tools abrufen."""
 
-    return f"""You are TimsGym AI — a strength & hypertrophy coach for {name}.
+    return f"""You are TimsGym AI — a strength & hypertrophy coach for the athlete in USER DATA.
 Reply in the user's language (usually German). Be specific, grounded, honest.
 Never flatter, never pad. If a load, a plan or an exercise choice is wrong
 for the user's goal, say so plainly and say why.
@@ -255,24 +279,25 @@ PLANNING (no active session)
   one plan, no menu. State total duration and what to cut first if time
   runs short.
 
-  WORKOUT CREATION — TEXT FIRST, THEN CARD:
-  1. DRAFT/REVISION: Write the complete workout in text, as described
-     above. Do not call start_workout_session in a turn where you write a
-     new or revised draft, unless the user asked for the plan and the card
-     in the same message. End the draft by asking whether to set it up,
-     e.g. "Soll ich dieses Workout so starten?"
-  2. CARD: As soon as the user agrees to the latest draft or asks to start
-     or train it — in any wording, also several messages later — call
-     start_workout_session. Copy every agreed exercise, set, rep, weight,
-     set type and note exactly into the tool, including every later
-     correction. Never replace mixed set schemes with defaults. The card
-     starts nothing; the user starts the workout with its button.
-  3. If the user wants to train but no plan exists in this conversation
-     yet, or asks for changes, write or revise the draft first (step 1).
-  4. Calling start_workout_session again replaces the previous card. Do it
-     whenever the user asks for the card again.
-  5. Only say a card is ready after start_workout_session succeeded in this
-     turn.
+  WORKOUT CREATION — SHOW THE START BUTTON WITH THE PROPOSAL:
+  1. When the user asks for a new workout, a repeat, or a revised workout,
+     retrieve the relevant history, prepare ONE complete structured plan,
+     and call start_workout_session IN THAT SAME TURN. Do not require a
+     separate chat confirmation before showing the start button.
+  2. The tool creates only a preview/start button. It does not start a
+     workout. The user explicitly starts it by clicking Workout starten.
+     Therefore, proposing a complete workout already authorizes this tool.
+  3. Explain the proposed workout in your reply, with the same exercises,
+     sets, reps, weights, types and notes as the tool. End by inviting the
+     user to click Workout starten or request changes, not by asking for
+     another chat confirmation. Never claim the session has started.
+  4. Revisions replace the previous proposal: call the tool again with
+     the complete revised plan. Also regenerate the card when requested
+     for a plan from earlier in the conversation, retaining corrections.
+  5. Only show a proposal when enough information exists to make it
+     concrete. General advice or an essential unresolved question does
+     not require a workout card. Only claim a button is ready after the
+     tool succeeded in this turn.
 
   MULTI-ACTION REQUESTS:
   If one message requests multiple actions, execute every required tool in
@@ -316,6 +341,31 @@ IN-SESSION (active session exists)
   correct_log.
 - Never claim to remember anything outside the database.
 
+════ REPEAT AND ADAPT — RETRIEVE BEFORE PRESCRIBING ════
+For "like last time", "another full-body workout", "repeat", or any request to
+adapt a previous workout, retrieve the reference from saved training records
+in THIS turn. Never reconstruct past performance from chat text or summaries.
+- Use get_session_summary with the requested title/date, include_details=true
+  and limit=1 for the latest matching COMPLETED workout. Full-body is a title
+  filter, not proof of content: if no match, inspect unfiltered recent sessions
+  and their exercises; clarify only if the reference remains ambiguous.
+- If a particular session ID is known from a tool result, get_workout_details
+  retrieves its exact structured contents. Do not fetch it again when the
+  complete workout was already returned by include_details=true.
+- For a separately mentioned exercise X, retrieve get_exercise_history using
+  its canonical exercise_id (or an unambiguous name). Search across workouts,
+  even if X is absent from the reference. Use limit=1 for last performance,
+  or 3-5 for progression. Retrieve session and exercise in the same tool round
+  when both queries are known; avoid redundant lookups.
+- If the user says "more X", establish what "more" is relative to. Distinguish
+  the reference workout's X volume from X's last performance elsewhere. If no
+  baseline exists, say so; ask or suggest a clearly labeled new starting plan.
+- Name the reference date/title, keep the relevant structure, and explain the
+  requested changes. Treat incomplete sets as planned, not achieved. Separate
+  warm-up/working sets and preserve recorded effort and notes. Never invent RIR.
+- For explicit corrections/logging without planning, avoid unrelated history
+  calls. Tools use the current database snapshot, not the UI chat cache.
+
 ════ CONSTRAINTS & FLAGS ════
 - Durable constraints apply to every exercise selection, silently. Do not
   re-explain them each session.
@@ -347,11 +397,12 @@ If a swap creates a real problem — same muscle twice, main lift after
 accessories — say it in one sentence, then adapt anyway.
 
 ════ TOOLS ════
-- start_workout_session   show the workout card once the user agrees to the text draft
+- start_workout_session   show a preview/start button with every complete workout proposal
 - log_set                 every set, during the session
 - correct_log             fix an earlier entry, on explicit instruction
 - get_exercise_history    any question about past loads for one lift
-- get_session_summary     any question about past sessions
+- get_session_summary     find past completed sessions; include_details for adapting
+- get_workout_details     exact saved workout by ID, with all recorded details
 - resolve_exercise        before logging an unclear exercise name
 - open_flag / resolve_flag   a symptom or limitation that changes
                           prescriptions but is not permanent
@@ -411,10 +462,19 @@ def run_chat(
     active_workout_state: Optional[dict],
     request_id: Optional[str] = None,
     thread_id: Optional[str] = None,
+    on_event: Callable[[dict], None] | None = None,
 ) -> dict:
     request_started = time.perf_counter()
     request_id = request_id or str(uuid.uuid4())
     trace_steps: list[dict] = []
+    first_text_ms = None
+    def emit(event: dict):
+        nonlocal first_text_ms
+        if event.get("type") == "delta" and first_text_ms is None:
+            first_text_ms = round((time.perf_counter() - request_started) * 1000)
+        if on_event:
+            on_event(event)
+    emit({"type": "status", "message": "Loading your training context…"})
     db = crud.get_user_database_state(session, user.id)
     if _client is None and not settings.CLAUDE_API_KEY:
         total_ms = round((time.perf_counter() - request_started) * 1000)
@@ -445,6 +505,7 @@ def run_chat(
     # 1. Auto-summarize: if recent history has grown past budget, compress older turns.
     history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
     if context.should_summarize("\n".join(m.content for m in history)):
+        emit({"type": "status", "message": "Organizing conversation memory…"})
         compacted = _try_summarize(session, user.id, thread_id)
         history_compacted = bool(compacted)
         summary_usage = compacted.get("usage") if compacted else None
@@ -494,12 +555,13 @@ def run_chat(
     #    reasoning until it returns a final text answer (bounded to avoid runaway).
     action_executed = None
     actions_executed = []
+    mutation_attempted = False
     tools_used: list[str] = []  # debug: every tool invoked this turn
     reply_text = ""
     usage = None
     MAX_STEPS = 4
     def execute_tool(name: str, args: dict, call_id: str = "") -> str:
-        nonlocal action_executed
+        nonlocal action_executed, mutation_attempted
         tool_started = time.perf_counter()
         tool_status = "success"
         handler = HANDLERS.get(name)
@@ -507,6 +569,18 @@ def run_chat(
             return "unknown tool"
 
         tools_used.append(name)
+        labels = {
+            "get_session_summary": "Checking previous workouts…",
+            "get_workout_details": "Reading workout details…",
+            "get_exercise_history": "Checking exercise history…",
+            "resolve_exercise": "Matching the exercise…",
+            "log_set": "Recording your set…",
+            "correct_log": "Updating the recorded set…",
+            "start_workout_session": "Preparing the workout card…",
+        }
+        emit({"type": "status", "message": labels.get(name, "Working on your request…")})
+        if name not in {"get_session_summary", "get_workout_details", "get_exercise_history", "resolve_exercise", "suggest_weight"}:
+            mutation_attempted = True
         try:
             result = handler(session, user.id, db, args, active_workout_state=active_workout_state)
             memory.write_tool_log(session, user.id, thread_id, name, args, str(result), "success")
@@ -515,8 +589,9 @@ def run_chat(
                 actions_executed.append(result)
 
             if name == "start_workout_session":
-                return ("The exact confirmed workout is now shown in the confirmation card. "
-                        "Tell the user to review the card and press Workout starten.")
+                return ("The proposed workout now has a preview/start button. No workout has started. "
+                        "Explain this exact plan and invite the user to click Workout starten or request changes. "
+                        "Do not ask for a separate chat confirmation.")
             if name == "log_set":
                 return (f"Set logged: {args.get('exercise_name')} {args.get('weight')}kg x {args.get('reps')} "
                         f"({args.get('set_type', 'working')}). Confirm to user in 1 compact line and name next block.")
@@ -528,6 +603,8 @@ def run_chat(
                 return f"Flag resolved: {args.get('keyword_or_id')}."
             if name == "suggest_weight":
                 return f"Suggested weight: {result.get('suggested_weight')}kg ({result.get('reasoning')})."
+            if name in {"get_session_summary", "get_workout_details", "get_exercise_history", "resolve_exercise"}:
+                return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
             return str(result) if result else "done"
         except Exception as error:
             tool_status = "error"
@@ -557,6 +634,7 @@ def run_chat(
             trace_steps.append(tool_trace)
 
     claude_failed = False
+    provider_fallback = None
     if settings.CLAUDE_API_KEY:
         claude_messages = [
             {"role": "user" if item.role == "user" else "assistant", "content": item.content}
@@ -575,29 +653,44 @@ def run_chat(
                 max_steps=MAX_STEPS,
                 timeout_seconds=settings.CLAUDE_TIMEOUT_SECONDS,
                 debug_payloads=settings.AI_DEBUG_PROMPTS,
+                on_event=emit if on_event else None,
+                prompt_caching=settings.CLAUDE_PROMPT_CACHING,
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
         except Exception as error:
-            claude_failed = True
-            print(f"[coach] Claude failed, trying Gemini fallback: {str(error)[:200]}")
+            emit({"type": "reset"})
+            # Never replay a request on another model after a mutation succeeded.
+            claude_failed = not mutation_attempted
+            if mutation_attempted:
+                reply_text = "Die abschließende KI-Antwort ist fehlgeschlagen. Änderungen könnten bereits gespeichert sein. Bitte prüfe den aktuellen Stand, bevor du die Anfrage wiederholst."
+            elif not _client:
+                reply_text = "Der KI-Coach konnte die Anfrage nicht abschließen. Bitte versuche es später erneut."
+            if claude_failed and _client:
+                reason = "timeout" if isinstance(error, TimeoutError) or "timed out" in str(error).lower() else "provider_error"
+                provider_fallback = {"from": "claude", "to": "gemini", "reason": reason}
+                emit({"type": "status", "message": "Claude took too long; trying Gemini…" if reason == "timeout" else "Claude is unavailable; trying Gemini…"})
+            else:
+                emit({"type": "status", "message": "Finishing your request…"})
+            logger.warning("Claude coach failed (%s); fallback=%s", type(error).__name__, claude_failed)
 
     for step_index in range(MAX_STEPS if (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
         model_started = time.perf_counter()
         try:
-            response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config)
+            response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config, on_event=emit if on_event else None)
             metadata = getattr(response, "usage_metadata", None)
             if metadata:
                 input_tokens = getattr(metadata, "prompt_token_count", 0) or 0
                 output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
+                previous_usage = usage if usage and usage.get("provider") == "gemini" else {}
                 usage = {
                     "provider": "gemini",
-                    "model": COACH_MODEL,
-                    "inputTokens": input_tokens,
-                    "outputTokens": output_tokens,
+                    "model": getattr(response, "model_version", None) or COACH_MODEL,
+                    "inputTokens": previous_usage.get("inputTokens", 0) + input_tokens,
+                    "outputTokens": previous_usage.get("outputTokens", 0) + output_tokens,
                     "cacheCreationTokens": 0,
-                    "cacheReadTokens": getattr(metadata, "cached_content_token_count", 0) or 0,
-                    "totalTokens": input_tokens + output_tokens,
+                    "cacheReadTokens": previous_usage.get("cacheReadTokens", 0) + (getattr(metadata, "cached_content_token_count", 0) or 0),
+                    "totalTokens": previous_usage.get("totalTokens", 0) + input_tokens + output_tokens,
                     "estimatedCostUsd": 0,
                 }
         except Exception as e:
@@ -609,6 +702,7 @@ def run_chat(
                 "provider": "gemini",
                 "status": "error",
             })
+            emit({"type": "reset"})
             msg = str(e)
             print(f"[coach] generate_content failed: {msg[:200]}")
             if _is_billing_error(e):
@@ -656,6 +750,7 @@ def run_chat(
         else:
             reply_text = "Wie kann ich dir beim Training helfen?"
 
+    emit({"type": "status", "message": "Saving your conversation…"})
     # Persist this turn for multi-turn continuity.
     persistence_started = time.perf_counter()
     memory.write_message(session, user.id, thread_id, "user", message)
@@ -711,6 +806,8 @@ def run_chat(
         "contextMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "context"),
         "persistenceMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "persistence"),
         "slowestStep": slowest,
+        "firstTextMs": first_text_ms,
+        "providerFallback": provider_fallback,
         "toolsOffered": [declaration["name"] for declaration in available_tools],
         "steps": trace_steps,
     }

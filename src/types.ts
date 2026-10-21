@@ -102,12 +102,13 @@ export interface AIChatMessage {
   usage?: AIUsage;
   trace?: AITrace;
   suggestedAction?: {
-    type: 'apply_weight' | 'add_exercise' | 'start_routine';
+    type: 'apply_weight' | 'add_exercise' | 'start_routine' | 'workout_proposed';
     exerciseId?: string;
     exerciseName?: string;
     weight?: number;
     reps?: number;
     routineId?: string;
+    workout?: WorkoutSession;
   };
 }
 
@@ -156,6 +157,8 @@ export interface AITrace {
   requestId: string;
   totalMs: number;
   roundTripMs?: number;
+  firstTextMs?: number | null;
+  providerFallback?: { from: string; to: string; reason: string } | null;
   agentSteps: number;
   modelMs: number;
   toolMs: number;

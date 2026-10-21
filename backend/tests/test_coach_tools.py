@@ -40,6 +40,20 @@ class CoachToolSelectionTests(unittest.TestCase):
                 patch.object(coach, "run_claude_agent", side_effect=fake_agent):
             return coach.run_chat(None, SimpleNamespace(id=1), message, active_workout)
 
+    def test_failed_final_generation_does_not_replay_a_mutation_on_gemini(self):
+        workout = {"id": "active", "exercises": []}
+        def failing_agent(**kwargs):
+            kwargs["handle_tool"]("log_set", {
+                "exercise_name": "Barbell Back Squat", "weight": 65,
+                "reps": 5, "set_type": "working",
+            }, "call_1")
+            raise RuntimeError("Connection lost after tool execution")
+        with patch.object(coach, "_generate_with_retry") as fallback:
+            result = self.run_chat("65 mal 5", [], failing_agent, workout)
+        fallback.assert_not_called()
+        self.assertEqual(len(result["actionsExecuted"]), 1)
+        self.assertEqual(result["actionsExecuted"][0]["type"], "set_logged")
+
     def test_logged_set_is_returned_to_workout_ui_without_inventing_rpe(self):
         workout = {"id": "active", "exercises": []}
 
@@ -56,6 +70,27 @@ class CoachToolSelectionTests(unittest.TestCase):
         self.assertEqual(updated["weight"], 65)
         self.assertIsNone(updated["rpe"])
         self.assertEqual(result["actionsExecuted"][0]["type"], "set_logged")
+
+    def test_timeout_fallback_records_the_reason(self):
+        def timed_out(**kwargs):
+            raise TimeoutError("The read operation timed out")
+        response = SimpleNamespace(function_calls=[], text="Fallback reply", usage_metadata=None)
+        with patch.object(coach, "_client", object()), \
+                patch.object(coach, "_generate_with_retry", return_value=response):
+            result = self.run_chat("Question", [], timed_out)
+        self.assertEqual(result["trace"]["providerFallback"], {
+            "from": "claude", "to": "gemini", "reason": "timeout",
+        })
+
+    def test_complete_proposal_can_include_start_button_without_prior_confirmation(self):
+        def proposing_agent(**kwargs):
+            kwargs["handle_tool"]("start_workout_session", WORKOUT_ARGS, "proposal")
+            return {"text": "Hier ist dein Vorschlag. Klicke Workout starten.", "usage": None}
+        result = self.run_chat("Schlage mir ein Workout vor", [], proposing_agent)
+        self.assertEqual(result["actionExecuted"]["type"], "workout_proposed")
+        self.assertEqual(result["actionExecuted"]["data"]["title"], WORKOUT_ARGS["title"])
+        self.assertIsNone(result["activeWorkoutState"])
+        self.assertFalse(result["actionExecuted"]["data"]["isCompleted"])
 
     def test_start_tool_is_offered_without_a_recognized_confirmation(self):
         offered = {}

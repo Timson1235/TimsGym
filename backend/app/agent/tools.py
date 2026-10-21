@@ -6,6 +6,7 @@ Each handler takes (session, user_id, db_state, args, **kwargs) and returns an
 the current camelCase DatabaseState.
 """
 import time
+from copy import deepcopy
 from typing import Any, Optional
 
 from sqlmodel import Session
@@ -76,7 +77,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "start_workout_session",
-        "description": "Show the user a workout card with the structured workout; the user starts it with the card's 'Workout starten' button, so calling this never starts a session by itself. Call it once the user agrees to a workout plan you wrote in text in this conversation, in any wording, also when they ask to start or train a plan from several messages earlier. Use the latest version of that plan including every later correction. Calling it again replaces the previous card.",
+        "description": "Show a preview/start button for a complete proposed workout in the same turn as the proposal or revision. Do not wait for a separate chat confirmation. Calling this tool never starts a session: the user explicitly starts it by clicking Workout starten. General training advice without a complete workout does not require this tool. Preserve every proposed exercise, set, rep, weight, set type and note. Calling it again replaces the previous proposal.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -84,7 +85,7 @@ TOOL_DECLARATIONS = [
                 "sessionNotes": {"type": "STRING", "description": "Optional warm-up, cooldown, and session-wide guidance"},
                 "exercises": {
                     "type": "ARRAY",
-                    "description": "Every exercise with every set exactly as agreed in the text draft",
+                    "description": "Every exercise with every set exactly as prescribed in this proposal",
                     "items": {
                         "type": "OBJECT",
                         "properties": {
@@ -149,25 +150,35 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_exercise_history",
-        "description": "Retrieve past logged performance and progression history for a specific exercise from the database.",
+        "description": "Retrieve a single exercise across completed workouts, newest first, independently of which workout contains it. Use limit=1 for its last performance or 3-5 for progression. Prefer exercise_id; names use canonical alias resolution and never guess ambiguous matches.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "exercise_name": {"type": "STRING", "description": "Name of the exercise to look up"},
+                "exercise_name": {"type": "STRING", "description": "Canonical name or alias; supply this or exercise_id."},
+                "exercise_id": {"type": "STRING", "description": "Permanent exercise ID from the library or a retrieved workout."},
                 "limit": {"type": "INTEGER", "description": "Number of recent sessions to retrieve (default 5)"},
             },
-            "required": ["exercise_name"],
         },
     },
     {
         "name": "get_session_summary",
-        "description": "Retrieve summaries of past workouts (e.g. to answer 'what did I do in the last 3 sessions?').",
+        "description": "Find completed workouts newest first, optionally by title or date. For repeat/adapt requests use limit=1 and include_details=true to retrieve the full reference workout in this call. The latest matching full-body workout can differ from the latest workout overall. Filters match titles/dates, not semantic workout content; if unmatched inspect recent sessions and ask if unclear.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "limit": {"type": "INTEGER", "description": "Number of past workouts to retrieve (default 3)"},
-                "search_title_or_date": {"type": "STRING", "description": "Optional title or date filter (YYYY-MM-DD)"},
+                "search_title_or_date": {"type": "STRING", "description": "Optional title or date filter (YYYY-MM-DD). Full body / Ganzkörper title aliases are supported."},
+                "include_details": {"type": "BOOLEAN", "description": "Return complete structured workouts including set types, effort and notes (default false). Use true when repeating/adapting a session."},
             },
+        },
+    },
+    {
+        "name": "get_workout_details",
+        "description": "Retrieve one exact saved workout by ID returned from a session/history lookup. Returns all recorded exercises, sets, types, effort and notes, including completion status. Use when a specific session is referenced; never invent an ID.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {"workout_id": {"type": "STRING", "description": "Exact saved workout ID."}},
+            "required": ["workout_id"],
         },
     },
     {
@@ -431,64 +442,109 @@ def handle_correct_log(session: Session, user_id: int, db: dict, args: dict, **k
     }
 
 
-def handle_get_exercise_history(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
-    query = (args.get("exercise_name") or "").strip().lower()
-    limit = int(args.get("limit", 5))
+def _history_limit(args: dict, default: int) -> int:
+    return max(1, min(10, int(args.get("limit") or default)))
 
-    match = next((e for e in db["exercises"] if e["name"].lower() == query or query in e["name"].lower()), None)
-    pr_info = (match.get("personalRecord") if match else None) or {}
+
+def _completed_workouts(db: dict) -> list[dict]:
+    # Stable sort preserves the database's created_at/ID order within each day.
+    return sorted((w for w in db.get("workouts", []) if w.get("isCompleted", True)),
+                  key=lambda w: w.get("date") or "", reverse=True)
+
+
+def _recorded_sets(exercise: dict) -> list[dict]:
+    return [deepcopy(s) for s in exercise.get("sets", []) if s.get("completed")]
+
+
+def handle_get_exercise_history(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
+    exercise_id = args.get("exercise_id")
+    query = (args.get("exercise_name") or "").strip()
+    if exercise_id:
+        match = next((e for e in db.get("exercises", []) if e["id"] == exercise_id), None)
+        candidates = []
+    else:
+        match, candidates = resolve_exercise(db.get("exercises", []), query)
+    if not match:
+        return {
+            "status": "ambiguous" if candidates else "not_found",
+            "query": query, "history": [],
+            "candidates": [{"id": e["id"], "name": e["name"]} for e in candidates[:5]],
+            "message": "Clarify the exercise; no performance was selected." if candidates else "No matching library exercise or logged baseline found.",
+        }
 
     history_entries = []
-    for w in db.get("workouts", []):
-        for we in w.get("exercises", []):
-            if query in we.get("exerciseName", "").lower():
-                completed_sets = [
-                    f"{s.get('weight')}x{s.get('reps')}" + (f" (RIR {round(10-s['rpe'], 1)})" if s.get('rpe') else "")
-                    for s in we.get("sets", []) if s.get("completed")
-                ]
-                if completed_sets:
-                    history_entries.append({
-                        "date": w.get("date"),
-                        "workoutTitle": w.get("title"),
-                        "sets": ", ".join(completed_sets),
-                    })
-                if len(history_entries) >= limit:
-                    break
-        if len(history_entries) >= limit:
+    for workout in _completed_workouts(db):
+        for exercise in workout.get("exercises", []):
+            # IDs are authoritative. Only legacy records without IDs use names.
+            if exercise.get("exerciseId"):
+                matches = exercise["exerciseId"] == match["id"]
+            else:
+                legacy, _ = resolve_exercise(db.get("exercises", []), exercise.get("exerciseName", ""))
+                matches = bool(legacy and legacy["id"] == match["id"])
+            if not matches:
+                continue
+            sets = _recorded_sets(exercise)
+            if not sets:
+                continue
+            history_entries.append({
+                "workoutId": workout["id"], "date": workout.get("date"),
+                "workoutTitle": workout.get("title"), "exerciseId": match["id"],
+                "sets": sets, "notes": exercise.get("notes"),
+            })
+        if len(history_entries) >= _history_limit(args, 5):
             break
-
     return {
-        "exercise": match["name"] if match else query,
-        "pr": pr_info,
-        "history": history_entries,
+        "status": "found" if history_entries else "no_history",
+        "exercise": match["name"], "exerciseId": match["id"],
+        "pr": match.get("personalRecord") or {},
+        "history": history_entries[:_history_limit(args, 5)],
     }
 
 
+_FULL_BODY_NAMES = ("full body", "fullbody", "full body workout", "ganzkorper", "ganzkoerper")
+
+
+def _matches_workout_title_or_date(workout: dict, query: str) -> bool:
+    normalized = normalize_exercise_name(query)
+    title = normalize_exercise_name(workout.get("title", ""))
+    if normalized in _FULL_BODY_NAMES:
+        return any(alias in title for alias in _FULL_BODY_NAMES)
+    return normalized in title or query in (workout.get("date") or "")
+
+
 def handle_get_session_summary(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
-    limit = int(args.get("limit", 3))
     query = (args.get("search_title_or_date") or "").strip().lower()
-
     summaries = []
-    for w in db.get("workouts", []):
-        if query and (query not in w.get("title", "").lower() and query not in w.get("date", "")):
+    for workout in _completed_workouts(db):
+        if query and not _matches_workout_title_or_date(workout, query):
             continue
-        ex_summaries = []
-        for we in w.get("exercises", []):
-            sets_str = ", ".join(f"{s.get('weight')}x{s.get('reps')}" for s in we.get("sets", []) if s.get("completed"))
-            if sets_str:
-                ex_summaries.append(f"{we.get('exerciseName')}: {sets_str}")
-        summaries.append({
-            "id": w.get("id"),
-            "date": w.get("date"),
-            "title": w.get("title"),
-            "totalVolume": w.get("totalVolume"),
-            "exercises": ex_summaries,
-            "notes": w.get("notes"),
-        })
-        if len(summaries) >= limit:
+        summary = {
+            "id": workout["id"], "date": workout.get("date"), "title": workout.get("title"),
+            "totalVolume": workout.get("totalVolume"), "notes": workout.get("notes"),
+            "exercises": [{"exerciseId": exercise.get("exerciseId"),
+                           "exerciseName": exercise.get("exerciseName"),
+                           "completedSets": len(_recorded_sets(exercise)),
+                           "sets": [{k: value for k, value in recorded.items()
+                                     if k in ("weight", "reps", "type", "rpe")}
+                                    for recorded in _recorded_sets(exercise)]}
+                          for exercise in workout.get("exercises", [])],
+        }
+        if args.get("include_details"):
+            summary["workout"] = deepcopy(workout)
+        summaries.append(summary)
+        if len(summaries) >= _history_limit(args, 3):
             break
+    return {"sessions": summaries, "order": "newest_first", "filter": query or None,
+            "message": None if summaries else "No matching completed workout. Inspect unfiltered recent sessions; do not assume the latest session was full-body."}
 
-    return {"sessions": summaries}
+
+def handle_get_workout_details(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
+    # db is scoped to the authenticated user; never query a global ID without ownership.
+    workout_id = args.get("workout_id")
+    workout = next((w for w in db.get("workouts", []) if w.get("id") == workout_id), None)
+    if not workout:
+        return {"status": "not_found", "message": "Workout not found in this user's saved workouts."}
+    return {"status": "found", "workout": deepcopy(workout)}
 
 
 def handle_resolve_exercise(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
@@ -628,6 +684,7 @@ HANDLERS = {
     "correct_log": handle_correct_log,
     "get_exercise_history": handle_get_exercise_history,
     "get_session_summary": handle_get_session_summary,
+    "get_workout_details": handle_get_workout_details,
     "resolve_exercise": handle_resolve_exercise,
     "open_flag": handle_open_flag,
     "resolve_flag": handle_resolve_flag,
