@@ -1,5 +1,6 @@
 import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
 import { auth } from './firebase';
+import { cacheChatHistory, removeCachedChat, readChatCache } from './chatCache';
 import { createGuestDatabase } from '../db/guest';
 
 const guestCacheKey = 'gym_db_cache:guest';
@@ -230,10 +231,16 @@ export async function fetchAIChatHistory(threadId?: string): Promise<AIChatMessa
 }
 
 export async function clearAIChatHistory(threadId?: string): Promise<void> {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
   const res = await fetch(`/api/ai/history${query}`, { method: 'DELETE', headers });
   if (!res.ok) throw new Error('Failed to clear AI chat history');
+  if (threadId) cacheChatHistory(owner, threadId, []);
+  else {
+    // Legacy callers omit the default thread ID: invalidate the account snapshot.
+    for (const id of Object.keys(readChatCache(owner).histories)) cacheChatHistory(owner, id, []);
+  }
 }
 
 export async function fetchAIChatSessions() {
@@ -256,12 +263,14 @@ export async function createAIChatSession(title = 'New chat') {
 }
 
 export async function deleteAIChatSession(threadId: string) {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const res = await fetch(`/api/ai/sessions/${encodeURIComponent(threadId)}`, {
     method: 'DELETE',
     headers,
   });
   if (!res.ok) throw new Error('Failed to delete AI chat session');
+  removeCachedChat(owner, threadId);
 }
 
 export async function fetchAIUsageSummary() {

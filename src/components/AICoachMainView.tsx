@@ -14,6 +14,7 @@ import {
   sendAIChatMessage,
 } from '../lib/api';
 import { auth } from '../lib/firebase';
+import { readChatCache, cacheChatSessions, cacheChatHistory, selectCachedChat, removeCachedChat } from '../lib/chatCache';
 import { ChatMarkdown } from './ChatMarkdown';
 import { AITraceDetails } from './AITraceDetails';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -64,7 +65,11 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   onSelectTab,
   initialPrompt = '',
 }) => {
-  const [messages, setMessages] = useState<AIChatMessage[]>([DEFAULT_WELCOME_MSG]);
+  const cacheOwner = auth.currentUser?.uid || 'guest';
+  const [initialCache] = useState(() => readChatCache(cacheOwner));
+  const initialThread = initialCache.activeThreadId || initialCache.sessions[0]?.id || '';
+  const [messages, setMessages] = useState<AIChatMessage[]>(() =>
+    [DEFAULT_WELCOME_MSG, ...(initialCache.histories[initialThread] || [])]);
 
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -74,32 +79,48 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [lastAction, setLastAction] = useState<any>(null);
   const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const [accountUsage, setAccountUsage] = useState<AIUsageSummary | null>(null);
-  const [chatSessions, setChatSessions] = useState<AIChatSession[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string>('');
+  const [chatSessions, setChatSessions] = useState<AIChatSession[]>(initialCache.sessions);
+  const [activeThreadId, setActiveThreadId] = useState<string>(initialThread);
+  const loadedThread = useRef(initialCache.histories[initialThread] !== undefined ? initialThread : '');
+  const sessionsRequest = useRef(0);
   const [isDeleteChatDialogOpen, setIsDeleteChatDialogOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const handledPromptRef = useRef<string>('');
   const reduceMotion = useReducedMotion();
 
-  const loadThread = async (threadId: string) => {
-    const request = ++threadRequest.current;
-    setIsSwitchingThread(true);
-    setThreadError('');
-    try {
-    const history = await fetchAIChatHistory(threadId);
-    if (request !== threadRequest.current) return;
+  const decorateHistory = (history: AIChatMessage[], threadId: string) => {
     let savedProposal: WorkoutSession | null = null;
     try {
-      const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${threadId}`);
+      const saved = localStorage.getItem(`timsgym:proposal:${cacheOwner}:${threadId}`);
       savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
-    } catch { savedProposal = null; }
-    setMessages([DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)]);
+    } catch { /* Proposal storage is optional. */ }
+    return [DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)];
+  };
+
+  const loadThread = async (threadId: string) => {
+    const request = ++threadRequest.current;
+    const cached = readChatCache(cacheOwner).histories[threadId];
+    loadedThread.current = cached !== undefined ? threadId : '';
     setActiveThreadId(threadId);
-    localStorage.setItem('active_ai_thread_id', threadId);
+    selectCachedChat(cacheOwner, threadId);
+    setMessages(decorateHistory(cached || [], threadId));
+    setIsSwitchingThread(cached === undefined);
+    setThreadError('');
     setLastAction(null);
     setSessionUsage(EMPTY_AI_USAGE);
+    try {
+      const history = await fetchAIChatHistory(threadId);
+      if (request !== threadRequest.current) return;
+      loadedThread.current = threadId;
+      const decorated = decorateHistory(history, threadId);
+      cacheChatHistory(cacheOwner, threadId, decorated);
+      setMessages(decorated);
     } catch {
-      if (request === threadRequest.current) setThreadError('Could not load this chat. Please try again.');
+      if (request === threadRequest.current) {
+        setThreadError(cached !== undefined
+          ? 'Showing saved messages. Could not refresh this chat.'
+          : 'Could not load this chat. Please try again.');
+      }
     } finally {
       if (request === threadRequest.current) setIsSwitchingThread(false);
     }
@@ -118,33 +139,50 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   };
 
   const refreshSessions = async () => {
-    const sessions = await fetchAIChatSessions();
-    setChatSessions(sessions);
-    return sessions as AIChatSession[];
+    const request = ++sessionsRequest.current;
+    const sessions = await fetchAIChatSessions() as AIChatSession[];
+    if (request === sessionsRequest.current) {
+      cacheChatSessions(cacheOwner, sessions);
+      setChatSessions(sessions);
+    }
+    return sessions;
   };
 
   useEffect(() => {
     let cancelled = false;
-    fetchAIChatSessions()
-      .then(async (sessions: AIChatSession[]) => {
-        if (cancelled || sessions.length === 0) return;
-        setChatSessions(sessions);
-        const saved = localStorage.getItem('active_ai_thread_id');
-        const selected = sessions.find((item) => item.id === saved) || sessions[0];
-        const history = await fetchAIChatHistory(selected.id);
-        if (!cancelled) {
-          setActiveThreadId(selected.id);
-          let savedProposal: WorkoutSession | null = null;
-          try {
-            const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${selected.id}`);
-            savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
-          } catch { savedProposal = null; }
-          setMessages([DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)]);
-        }
-      })
-      .catch((error) => console.error('Failed to load chat sessions:', error));
-    return () => { cancelled = true; };
+    // Revalidate the selected cached history concurrently with the chat list.
+    if (initialThread) void loadThread(initialThread);
+    const initialHistoryRequest = threadRequest.current;
+    void refreshSessions().then((sessions) => {
+      if (cancelled || threadRequest.current !== initialHistoryRequest) return;
+      if (sessions.length === 0) {
+        ++threadRequest.current;
+        loadedThread.current = '';
+        setActiveThreadId('');
+        setMessages([DEFAULT_WELCOME_MSG]);
+        setIsSwitchingThread(false);
+        return;
+      }
+      const selected = sessions.find((item) => item.id === initialThread) || sessions[0];
+      if (!initialThread || selected.id !== initialThread) void loadThread(selected.id);
+    }).catch(() => {
+      if (!cancelled && threadRequest.current === initialHistoryRequest) {
+        setThreadError('Could not refresh chats. Saved conversations remain available.');
+      }
+    });
+    return () => {
+      cancelled = true;
+      ++threadRequest.current;
+      ++sessionsRequest.current;
+    };
   }, []);
+
+  // Persist visible replies and proposal dismissals, but not an unfinished send.
+  useEffect(() => {
+    if (activeThreadId && loadedThread.current === activeThreadId && !isLoading && !isSwitchingThread) {
+      cacheChatHistory(cacheOwner, activeThreadId, messages);
+    }
+  }, [messages, activeThreadId, isLoading, isSwitchingThread, cacheOwner]);
 
   useEffect(() => {
     fetchAIUsageSummary()
@@ -166,15 +204,18 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   }, [messages, isLoading]);
 
   useEffect(() => {
-    if (initialPrompt && initialPrompt !== handledPromptRef.current) {
+    if (initialPrompt && activeThreadId && !isSwitchingThread && initialPrompt !== handledPromptRef.current) {
       handledPromptRef.current = initialPrompt;
       handleSendMessage(initialPrompt);
     }
-  }, [initialPrompt]);
+  }, [initialPrompt, activeThreadId, isSwitchingThread]);
 
   const handleSendMessage = async (textToSend?: string) => {
     const text = textToSend || inputMessage;
-    if (!text.trim() || isLoading || isSwitchingThread) return;
+    if (!text.trim() || isLoading || isSwitchingThread || !activeThreadId) return;
+    // A background history response must never overwrite a new message.
+    const request = ++threadRequest.current;
+    setThreadError('');
 
     const userMsg: AIChatMessage = {
       id: `msg_${Date.now()}`,
@@ -189,6 +230,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
     try {
       const response = await sendAIChatMessage(text, activeWorkout, activeThreadId);
+      if (request !== threadRequest.current) return;
 
       if (response.usage) {
         setSessionUsage((current) => mergeAIUsage(current, response.usage));
@@ -230,15 +272,17 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
       if (response.historyCompacted && activeThreadId) {
         const activeHistory = await fetchAIChatHistory(activeThreadId);
-        setMessages([DEFAULT_WELCOME_MSG, ...activeHistory]);
+        if (request !== threadRequest.current) return;
+        setMessages(decorateHistory(activeHistory, activeThreadId));
       } else {
         setMessages((prev) => [...prev, assistantMsg]);
       }
-      await refreshSessions();
+      void refreshSessions().catch(() => setThreadError('Reply saved. Could not refresh the chat list.'));
       fetchAIUsageSummary()
         .then(setAccountUsage)
         .catch((error) => console.error('Failed to refresh account AI usage:', error));
     } catch (error) {
+      if (request !== threadRequest.current) return;
       console.error('Failed to communicate with AI Coach:', error);
       const errorMsg: AIChatMessage = {
         id: `msg_err_${Date.now()}`,
@@ -248,11 +292,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
-      setIsLoading(false);
+      if (request === threadRequest.current) setIsLoading(false);
     }
   };
 
   const handleNewChat = async () => {
+    ++threadRequest.current;
     try {
       const created = await createAIChatSession();
       await refreshSessions();
@@ -265,7 +310,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const handleDeleteChat = async () => {
     if (!activeThreadId) return;
     try {
+      ++threadRequest.current;
       await deleteAIChatSession(activeThreadId);
+      removeCachedChat(cacheOwner, activeThreadId);
+      setActiveThreadId('');
+      setMessages([DEFAULT_WELCOME_MSG]);
+      try { localStorage.removeItem(`timsgym:proposal:${cacheOwner}:${activeThreadId}`); } catch { /* Optional storage. */ }
       let sessions = await refreshSessions();
       if (sessions.length === 0) {
         const created = await createAIChatSession();
@@ -512,7 +562,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 type="submit"
                 aria-label="Send message"
                 title="Send message"
-                disabled={!inputMessage.trim() || isLoading || isSwitchingThread}
+                disabled={!inputMessage.trim() || !activeThreadId || isLoading || isSwitchingThread}
                 className="app-icon-button app-primary shadow-sm disabled:opacity-40"
               >
                 {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

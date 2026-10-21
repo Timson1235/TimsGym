@@ -1,5 +1,5 @@
 import { DatabaseState } from '../types';
-import { DEFAULT_SEED_EXERCISES, DEFAULT_TEMPLATES } from './users';
+import { DEFAULT_SEED_EXERCISES, DEFAULT_TEMPLATES } from './defaults';
 
 export function createGuestDatabase(): DatabaseState {
   const exercises = DEFAULT_SEED_EXERCISES.map((exercise) => ({
