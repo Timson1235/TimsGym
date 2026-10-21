@@ -5,7 +5,6 @@ app). Conversation memory + summarization arrive in Phase 2b.
 """
 import json
 import logging
-import re
 import time
 import uuid
 from datetime import datetime
@@ -25,11 +24,6 @@ from ..models import User
 from . import tools
 from .claude_provider import run_claude_agent
 from .tools import HANDLERS, TOOL_DECLARATIONS
-from .workout_flow import (
-    WORKOUT_CONFIRMATION_QUESTION,
-    has_pending_workout_draft,
-    is_explicit_workout_confirmation,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +45,15 @@ COACH_FALLBACK_MODEL = settings.GEMINI_FALLBACK_MODEL
 COACH_LAST_RESORT_MODEL = settings.GEMINI_LAST_RESORT_MODEL
 
 
+def _is_billing_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (getattr(error, "code", None) == 402
+            or "402" in message
+            or "prepayment" in message
+            or "billing" in message
+            or "insufficient credit" in message)
+
+
 def _generate_with_retry(client: genai.Client, model: str, contents: list, config: types.GenerateContentConfig):
     last_err = None
     models = list(dict.fromkeys([model, COACH_FALLBACK_MODEL, COACH_LAST_RESORT_MODEL]))
@@ -62,6 +65,9 @@ def _generate_with_retry(client: genai.Client, model: str, contents: list, confi
         except Exception as e:
             last_err = e
             msg = str(e)
+            # Billing applies to the provider account, so model retries hide the cause.
+            if _is_billing_error(e):
+                raise
             is_transient = any(code in msg.upper() for code in [
                 "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
                 "500", "INTERNAL", "FETCH FAILED", "TIMEOUT",
@@ -71,16 +77,6 @@ def _generate_with_retry(client: genai.Client, model: str, contents: list, confi
             print(f"[coach] Gemini {candidate_model} unavailable; trying next model: {msg[:80]}")
             time.sleep(0.4)
     raise last_err
-
-
-def _claims_workout_started_without_tool(reply: str, action_executed: Optional[dict]) -> bool:
-    if action_executed and action_executed.get("type") == "workout_proposed":
-        return False
-    return bool(re.search(
-        r"(workout|training).{0,30}(gestartet|erstellt|vorbereitet)|tool.{0,30}(genutzt|verwendet|erstellt)",
-        reply,
-        flags=re.IGNORECASE,
-    ))
 
 
 MAIN_LIFT_KEYWORDS = [
@@ -259,14 +255,24 @@ PLANNING (no active session)
   one plan, no menu. State total duration and what to cut first if time
   runs short.
 
-  WORKOUT CREATION IS ALWAYS TWO PHASES:
-  1. DRAFT/REVISION: Write the complete workout in text. Never call
-     start_workout_session while proposing or revising. End every complete
-     draft with exactly: "{WORKOUT_CONFIRMATION_QUESTION}"
-  2. CONFIRMATION: Only after the user explicitly confirms that latest draft,
-     call start_workout_session once. Copy every agreed exercise, set, rep,
-     weight, set type and note exactly into the tool. Never replace mixed set
-     schemes with defaults. If no complete draft is pending, do not call it.
+  WORKOUT CREATION — TEXT FIRST, THEN CARD:
+  1. DRAFT/REVISION: Write the complete workout in text, as described
+     above. Do not call start_workout_session in a turn where you write a
+     new or revised draft, unless the user asked for the plan and the card
+     in the same message. End the draft by asking whether to set it up,
+     e.g. "Soll ich dieses Workout so starten?"
+  2. CARD: As soon as the user agrees to the latest draft or asks to start
+     or train it — in any wording, also several messages later — call
+     start_workout_session. Copy every agreed exercise, set, rep, weight,
+     set type and note exactly into the tool, including every later
+     correction. Never replace mixed set schemes with defaults. The card
+     starts nothing; the user starts the workout with its button.
+  3. If the user wants to train but no plan exists in this conversation
+     yet, or asks for changes, write or revise the draft first (step 1).
+  4. Calling start_workout_session again replaces the previous card. Do it
+     whenever the user asks for the card again.
+  5. Only say a card is ready after start_workout_session succeeded in this
+     turn.
 
   MULTI-ACTION REQUESTS:
   If one message requests multiple actions, execute every required tool in
@@ -323,6 +329,16 @@ IN-SESSION (active session exists)
 - Equipment safety: if the user describes an improvised or unstable
   setup, name the risk once, concretely, and give the safer version.
 
+════ PROGRESSIVE OVERLOAD ════
+When planning a repeated lift or asked how to progress, retrieve its exercise
+history. Compare completed working sets at the same load and rep target,
+using reported RIR and constraints. Suggest ONE concrete next-session target
+and explain which logged sets justify it. If all working sets met the rep
+prescription with spare reps, suggest one extra rep or the smallest available
+load increment. If reps were missed or effort was too high, hold the load.
+Do not increase every lift automatically. Missing effort or comparable data
+means hold or ask, never invent a baseline. Never change a workout silently.
+
 ════ PLAN DRIFT ════
 The user reorders, swaps and skips blocks mid-session. That is normal, not
 an error. Adapt the remaining blocks and state the consequence in one line
@@ -331,7 +347,7 @@ If a swap creates a real problem — same muscle twice, main lift after
 accessories — say it in one sentence, then adapt anyway.
 
 ════ TOOLS ════
-- start_workout_session   create the confirm-card only after explicit approval
+- start_workout_session   show the workout card once the user agrees to the text draft
 - log_set                 every set, during the session
 - correct_log             fix an earlier entry, on explicit instruction
 - get_exercise_history    any question about past loads for one lift
@@ -378,6 +394,16 @@ _FALLBACK_REPLIES = {
 }
 
 
+def _try_summarize(session: Session, user_id: int, thread_id: str):
+    """Compaction is optional; retain original messages if it fails."""
+    try:
+        return summ.summarize_conversation(session, user_id, thread_id)
+    except Exception as error:
+        session.rollback()
+        logger.warning("Conversation summarization skipped (%s)", type(error).__name__)
+        return None
+
+
 def run_chat(
     session: Session,
     user: User,
@@ -419,37 +445,14 @@ def run_chat(
     # 1. Auto-summarize: if recent history has grown past budget, compress older turns.
     history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
     if context.should_summarize("\n".join(m.content for m in history)):
-        compacted = summ.summarize_conversation(session, user.id, thread_id)
+        compacted = _try_summarize(session, user.id, thread_id)
         history_compacted = bool(compacted)
         summary_usage = compacted.get("usage") if compacted else None
         history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
 
-    can_start_workout = (
-        is_explicit_workout_confirmation(message)
-        and has_pending_workout_draft(history)
-    )
-    normalized_message = message.strip().lower()
-    explicit_memory_save = bool(re.search(
-        r"\b(add|save|store|remember)\b.{0,35}\bmemory\b|"
-        r"\bmemory\b.{0,35}\b(add|save|store)\b|"
-        r"\b(merk|merke|speicher|speichere)\b.{0,20}\b(dir|erinnerung|gedächtnis)?\b",
-        normalized_message,
-    ))
-    explicit_memory_remove = bool(re.search(
-        r"\b(forget|remove|delete)\b.{0,35}\bmemory\b|"
-        r"\b(vergiss|lösche|entferne)\b.{0,25}\b(erinnerung|gedächtnis|memory)?\b",
-        normalized_message,
-    ))
-    required_tool_name = (
-        "start_workout_session" if can_start_workout
-        else "remove_personal_memory" if explicit_memory_remove
-        else "save_personal_memory" if explicit_memory_save
-        else None
-    )
-    available_tools = [
-        declaration for declaration in TOOL_DECLARATIONS
-        if declaration["name"] != "start_workout_session" or can_start_workout
-    ]
+    # Every tool is offered on every turn. When a tool fits is the model's call,
+    # guided by the system prompt and the tool descriptions.
+    available_tools = list(TOOL_DECLARATIONS)
 
     # 2. System context + references to any compressed (summarized) history.
     system_instruction = _build_system_instruction(db, active_workout_state)
@@ -490,6 +493,7 @@ def run_chat(
     # 4. Multi-step agent loop: the model may call tools, see the results, and keep
     #    reasoning until it returns a final text answer (bounded to avoid runaway).
     action_executed = None
+    actions_executed = []
     tools_used: list[str] = []  # debug: every tool invoked this turn
     reply_text = ""
     usage = None
@@ -508,6 +512,7 @@ def run_chat(
             memory.write_tool_log(session, user.id, thread_id, name, args, str(result), "success")
             if isinstance(result, dict) and "type" in result:
                 action_executed = result
+                actions_executed.append(result)
 
             if name == "start_workout_session":
                 return ("The exact confirmed workout is now shown in the confirmation card. "
@@ -567,9 +572,9 @@ def run_chat(
                 tools=available_tools,
                 handle_tool=execute_tool,
                 on_trace_step=trace_steps.append,
-                force_tool_name=required_tool_name,
                 max_steps=MAX_STEPS,
                 timeout_seconds=settings.CLAUDE_TIMEOUT_SECONDS,
+                debug_payloads=settings.AI_DEBUG_PROMPTS,
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
@@ -606,7 +611,9 @@ def run_chat(
             })
             msg = str(e)
             print(f"[coach] generate_content failed: {msg[:200]}")
-            if "503" in msg or "UNAVAILABLE" in msg:
+            if _is_billing_error(e):
+                note = "⚠️ Der KI-Anbieter meldet ein Guthaben-/Abrechnungsproblem. Bitte prüfe das Billing des konfigurierten API-Projekts. Der Coach konnte die Anfrage nicht abschließen."
+            elif "503" in msg or "UNAVAILABLE" in msg:
                 note = "⚠️ Die Gemini-Server von Google sind gerade kurzzeitig überlastet (503 High Demand). Bitte sende die Nachricht gleich nochmal ab."
             elif "RESOURCE_EXHAUSTED" in msg or "429" in msg:
                 note = "⚠️ Die KI ist gerade rate-limited (Gemini Free-Tier). Versuch's in einer Minute nochmal."
@@ -649,24 +656,6 @@ def run_chat(
         else:
             reply_text = "Wie kann ich dir beim Training helfen?"
 
-    if action_executed and action_executed.get("type") == "workout_proposed":
-        reply_text = (
-            "Der bestätigte Plan ist jetzt als Workout-Karte vorbereitet. Prüf ihn kurz "
-            "und klick auf **Workout starten**."
-        )
-    elif can_start_workout:
-        reply_text = (
-            "Ich konnte das Workout-Tool nicht erfolgreich auslösen. Das Workout wurde nicht "
-            "gestartet; bitte versuche die Bestätigung erneut."
-        )
-    elif required_tool_name and required_tool_name not in tools_used:
-        reply_text = "Ich konnte die gewünschte Änderung nicht im persönlichen Gedächtnis speichern. Bitte versuche es erneut."
-    elif _claims_workout_started_without_tool(reply_text, action_executed):
-        reply_text = (
-            f"Das Workout wurde noch nicht gestartet. Ich muss zuerst den vollständigen Plan "
-            f"bestätigen lassen: {WORKOUT_CONFIRMATION_QUESTION}"
-        )
-
     # Persist this turn for multi-turn continuity.
     persistence_started = time.perf_counter()
     memory.write_message(session, user.id, thread_id, "user", message)
@@ -680,7 +669,7 @@ def run_chat(
     active_after_turn = memory.read_recent_messages(session, user.id, thread_id, limit=200)
     if context.should_summarize("\n".join(m.content for m in active_after_turn)):
         summary_started = time.perf_counter()
-        compacted = summ.summarize_conversation(session, user.id, thread_id)
+        compacted = _try_summarize(session, user.id, thread_id)
         history_compacted = history_compacted or bool(compacted)
         if compacted:
             extra_usage = compacted.get("usage") or {}
@@ -722,12 +711,15 @@ def run_chat(
         "contextMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "context"),
         "persistenceMs": sum(item["durationMs"] for item in trace_steps if item["kind"] == "persistence"),
         "slowestStep": slowest,
+        "toolsOffered": [declaration["name"] for declaration in available_tools],
         "steps": trace_steps,
     }
     print(json.dumps({"event": "ai_trace", **trace}, separators=(",", ":")))
     return {
         "reply": reply_text,
         "actionExecuted": action_executed,
+        "actionsExecuted": actions_executed,
+        "activeWorkoutState": active_workout_state,
         "toolsUsed": tools_used,
         "usage": usage,
         "trace": trace,
@@ -739,39 +731,35 @@ def run_chat(
 def suggest_weight(session: Session, user: User, exercise_name: str, target_reps: int = 8, target_rpe: int = 8) -> dict:
     """Deterministic arithmetic weight recommendation based on RIR without LLM calls."""
     db = crud.get_user_database_state(session, user.id)
-    query = (exercise_name or "").strip().lower()
+    canonical, _ = tools.resolve_exercise(db.get("exercises", []), exercise_name)
+    if not canonical:
+        return {"suggestedWeight": None, "reasoning": "Übung nicht eindeutig gefunden — bitte aus der Bibliothek wählen."}
 
-    last_weight = None
-    last_rir = None
-    for w in db.get("workouts", []):
-        for we in w.get("exercises", []):
-            if query in we.get("exerciseName", "").lower():
-                completed = [s for s in we.get("sets", []) if s.get("completed")]
-                if completed:
-                    last_set = completed[-1]
-                    last_weight = last_set.get("weight")
-                    if last_set.get("rpe") is not None:
-                        last_rir = round(10.0 - float(last_set["rpe"]), 1)
-                    break
-        if last_weight is not None:
-            break
-
-    if last_weight is None:
-        match = next((e for e in db.get("exercises", []) if e.get("name", "").lower() == query or query in e.get("name", "").lower()), None)
-        if match and match.get("personalRecord"):
-            pr = match["personalRecord"]
-            last_weight = pr.get("maxWeight", 50)
-            last_rir = 2.0
-        else:
-            last_weight = 40.0
-            last_rir = None
-
-    is_main = any(term in query for term in ["bank", "bench", "squat", "kniebeuge", "kreuzheben", "deadlift", "drücken", "press", "klimmzug", "pull-up", "rudern", "row"])
-    weight, reason = tools.calculate_suggested_weight(float(last_weight), last_rir, is_main_lift=is_main)
-
-    return {
-        "suggestedWeight": weight,
-        "suggestedReps": target_reps,
-        "recommendation": f"{weight}kg ({reason})",
-        "reasoning": reason,
-    }
+    # Use the latest completed session, and only comparable working sets.
+    for workout in sorted(db.get("workouts", []), key=lambda w: w.get("date", ""), reverse=True):
+        if not workout.get("isCompleted"):
+            continue
+        entry = next((e for e in workout.get("exercises", [])
+                      if e.get("exerciseId") == canonical["id"]), None)
+        if not entry:
+            continue
+        sets = [s for s in entry.get("sets", []) if s.get("completed") and s.get("type", "working") == "working"]
+        if not sets:
+            continue
+        weights = {s.get("weight") for s in sets}
+        if len(weights) != 1 or None in weights:
+            return {"suggestedWeight": None, "reasoning": "Unterschiedliche Arbeitsgewichte — bitte den Coach nach einem passenden Ziel fragen."}
+        weight = float(sets[0]["weight"])
+        reason = "Gewicht halten: Wiederholungsziel oder Belastung noch nicht für alle Arbeitssätze bestätigt."
+        if (weight > 0 and all(s.get("reps", 0) >= target_reps for s in sets)
+                and all(s.get("rpe") is not None and s["rpe"] <= target_rpe - 1 for s in sets)):
+            # Conservative default until equipment-specific increments are configured.
+            reason = "Alle Arbeitssätze am Wiederholungsziel mit Reserve: zunächst eine Wiederholung pro Satz mehr."
+            target_reps += 1
+        return {
+            "suggestedWeight": weight,
+            "suggestedReps": target_reps,
+            "recommendation": f"{weight:g} kg × {target_reps}",
+            "reasoning": f"{reason} Basis: {workout.get('date')}, {len(sets)} Arbeitssätze.",
+        }
+    return {"suggestedWeight": None, "reasoning": "Noch keine abgeschlossenen Arbeitssätze vorhanden — zuerst ein Ausgangsgewicht loggen."}

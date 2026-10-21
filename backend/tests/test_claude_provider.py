@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from app.agent.claude_provider import run_claude_agent
+from app.agent.tools import TOOL_DECLARATIONS
 
 
 class FakeResponse:
@@ -20,6 +21,17 @@ class FakeResponse:
 
 
 class ClaudeProviderTests(unittest.TestCase):
+    def test_full_coach_toolset_stays_within_strict_optional_budget(self):
+        with patch("app.agent.claude_provider._request_json", return_value={
+            "content": [{"type": "text", "text": "OK"}],
+        }) as request:
+            run_claude_agent(api_key="test", model="test", system_instruction="test",
+                             messages=[{"role": "user", "content": "test"}],
+                             tools=TOOL_DECLARATIONS, handle_tool=lambda *args: "done")
+        payload = json.loads(request.call_args.args[0].data)
+        self.assertEqual(len(payload["tools"]), len(TOOL_DECLARATIONS))
+        self.assertTrue(all(not t["strict"] for t in payload["tools"]))
+
     def test_multiple_tools_can_run_sequentially(self):
         requests = []
         responses = iter([
@@ -35,7 +47,7 @@ class ClaudeProviderTests(unittest.TestCase):
                 "name": "log_workout",
                 "input": {"title": "Completed workout", "exercises": []},
             }]}),
-            FakeResponse({"content": [{"type": "text", "text": "Gelöscht und eingetragen."}]}),
+            FakeResponse({"stop_reason": "end_turn", "content": [{"type": "text", "text": "Gelöscht und eingetragen."}]}),
         ])
 
         def fake_urlopen(request, timeout, context):
@@ -82,6 +94,11 @@ class ClaudeProviderTests(unittest.TestCase):
             [step["name"] for step in result["traceSteps"]],
             ["Claude round 1", "Claude round 2", "Claude round 3"],
         )
+        self.assertEqual(
+            [step["toolCalls"] for step in result["traceSteps"]],
+            [["delete_workout"], ["log_workout"], []],
+        )
+        self.assertEqual(result["traceSteps"][2]["stopReason"], "end_turn")
         self.assertEqual(calls, [
             ("delete_workout", {"searchOrId": "empty restart"}, "tool_1"),
             ("log_workout", {"title": "Completed workout", "exercises": []}, "tool_2"),

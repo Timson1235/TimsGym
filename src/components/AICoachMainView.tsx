@@ -13,6 +13,7 @@ import {
   fetchAIUsageSummary,
   sendAIChatMessage,
 } from '../lib/api';
+import { auth } from '../lib/firebase';
 import { ChatMarkdown } from './ChatMarkdown';
 import { AITraceDetails } from './AITraceDetails';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -27,6 +28,7 @@ import {
 interface AICoachMainViewProps {
   db: DatabaseState;
   activeWorkout: WorkoutSession | null;
+  onUpdateActiveWorkout: (workout: WorkoutSession) => void;
   onUpdateDatabase: (newDb: DatabaseState) => void;
   onStartWorkoutSession: (session: WorkoutSession) => void;
   onSelectTab: (tab: 'ai-coach' | 'active-workout' | 'history' | 'exercises' | 'analytics') => void;
@@ -67,6 +69,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   db,
   activeWorkout,
   onUpdateDatabase,
+  onUpdateActiveWorkout,
   onStartWorkoutSession,
   onSelectTab,
   initialPrompt = '',
@@ -100,13 +103,23 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setActiveThreadId(threadId);
     localStorage.setItem('active_ai_thread_id', threadId);
     setLastAction(null);
-    setProposedWorkout(null);
+    try {
+      const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${threadId}`);
+      setProposedWorkout(saved ? JSON.parse(saved) : null);
+    } catch { setProposedWorkout(null); }
     setSessionUsage(EMPTY_AI_USAGE);
     } catch {
       if (request === threadRequest.current) setThreadError('Could not load this chat. Please try again.');
     } finally {
       if (request === threadRequest.current) setIsSwitchingThread(false);
     }
+  };
+
+  const dismissProposal = () => {
+    setProposedWorkout(null);
+    try {
+      localStorage.removeItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`);
+    } catch { /* Storage may be unavailable. */ }
   };
 
   const refreshSessions = async () => {
@@ -126,6 +139,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         const history = await fetchAIChatHistory(selected.id);
         if (!cancelled) {
           setActiveThreadId(selected.id);
+          try {
+            const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${selected.id}`);
+            setProposedWorkout(saved ? JSON.parse(saved) : null);
+          } catch { setProposedWorkout(null); }
           setMessages([DEFAULT_WELCOME_MSG, ...history]);
         }
       })
@@ -185,11 +202,18 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         onUpdateDatabase(response.db);
       }
 
-      if (response.actionExecuted) {
-        setLastAction(response.actionExecuted);
-        if (response.actionExecuted.type === 'workout_proposed') {
+      if (response.activeWorkoutState) {
+        onUpdateActiveWorkout(response.activeWorkoutState);
+      }
+
+      for (const action of response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : [])) {
+        setLastAction(action);
+        if (action.type === 'workout_proposed') {
           // Show a proposal card with a confirm button — do NOT auto-start.
-          setProposedWorkout(response.actionExecuted.data);
+          setProposedWorkout(action.data);
+          try {
+            localStorage.setItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`, JSON.stringify(action.data));
+          } catch { /* The current card remains usable when browser storage is full. */ }
         }
       }
 
@@ -443,13 +467,13 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
               </ul>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => { onStartWorkoutSession(proposedWorkout); setProposedWorkout(null); }}
+                  onClick={() => { dismissProposal(); onStartWorkoutSession(proposedWorkout); }}
                   className="app-primary flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold shadow-sm"
                 >
                   <Play className="h-3.5 w-3.5" /> Workout starten
                 </button>
                 <button
-                  onClick={() => setProposedWorkout(null)}
+                  onClick={dismissProposal}
                   className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
                 >
                   Verwerfen

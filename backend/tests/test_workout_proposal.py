@@ -3,18 +3,6 @@ from unittest.mock import patch
 
 from app.agent.workout_builder import build_workout_proposal
 from app.agent.tools import handle_start_workout_session
-from app.agent.workout_flow import (
-    WORKOUT_CONFIRMATION_QUESTION,
-    has_pending_workout_draft,
-    is_explicit_workout_confirmation,
-)
-
-
-class Message:
-    def __init__(self, role: str, content: str):
-        self.role = role
-        self.content = content
-
 
 class WorkoutProposalTests(unittest.TestCase):
     def test_preserves_every_confirmed_set(self):
@@ -63,26 +51,6 @@ class WorkoutProposalTests(unittest.TestCase):
         self.assertEqual(result["type"], "workout_proposed")
         self.assertEqual(result["data"]["exercises"][0]["exerciseName"], "Countermovement Jumps")
         save_user_exercise.assert_called_once()
-
-    def test_requires_draft_and_explicit_confirmation(self):
-        history = [Message("assistant", f"Hier ist dein Plan. {WORKOUT_CONFIRMATION_QUESTION}")]
-        self.assertTrue(has_pending_workout_draft(history))
-        self.assertTrue(is_explicit_workout_confirmation("Ja, starte das Workout"))
-        self.assertFalse(is_explicit_workout_confirmation("Mach mir bitte ein Workout"))
-
-    def test_revision_is_not_a_start_confirmation(self):
-        self.assertFalse(is_explicit_workout_confirmation("Nein, nimm bei Kniebeugen 6 Wiederholungen"))
-
-    def test_short_german_start_confirmations(self):
-        self.assertTrue(is_explicit_workout_confirmation("leg los"))
-        self.assertTrue(is_explicit_workout_confirmation("auf gehts"))
-
-    def test_legacy_workout_draft_is_detected(self):
-        history = [Message(
-            "assistant",
-            "Hier ist dein Workout-Plan: Kniebeugen 3x5, Bankdrücken 3x8.",
-        )]
-        self.assertTrue(has_pending_workout_draft(history))
 
 
 if __name__ == "__main__":

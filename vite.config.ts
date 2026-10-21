@@ -20,7 +20,7 @@ export default defineConfig(() => {
       // Phase 0: forward /api/* to the FastAPI backend. Only used by the standalone
       // `vite` dev server (npm run dev:web); the Express server.ts is unaffected.
       proxy: {
-        '/api': 'http://localhost:8000',
+        '/api': `http://127.0.0.1:${process.env.API_PORT || '8000'}`,
       },
     },
   };

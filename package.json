@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "node scripts/dev.mjs",
     "dev:web": "vite",
-    "dev:api": "cd backend && .venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000",
+    "dev:api": "node scripts/dev.mjs --api-only",
     "build": "vite build",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",

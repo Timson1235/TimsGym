@@ -44,13 +44,15 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [loadingAiExerciseId, setLoadingAiExerciseId] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, string>>({});
 
-  // Timer interval
+  // Derive duration from the persisted start time, including after tab switches.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
+    const started = Date.parse(activeWorkout.startTime || '');
+    const update = () => setElapsedSeconds(Number.isFinite(started)
+      ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : 0);
+    update();
+    const timer = setInterval(update, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [activeWorkout.id, activeWorkout.startTime]);
 
   const formatTimer = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
@@ -199,13 +201,17 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
 
   const handleGetAISuggestion = async (we: WorkoutExercise) => {
     setLoadingAiExerciseId(we.id);
-    const suggestion = await fetchAISuggestedWeight(we.exerciseName, 8, 8);
+    const target = we.sets.find((set) => !set.completed && set.type === 'working');
+    const suggestion = await fetchAISuggestedWeight(we.exerciseName, target?.reps ?? 8, target?.rpe ?? 8);
+    if (suggestion && suggestion.suggestedWeight == null) {
+      setAiSuggestions((prev) => ({ ...prev, [we.id]: suggestion.reasoning }));
+    }
     setLoadingAiExerciseId(null);
 
-    if (suggestion && suggestion.suggestedWeight) {
+    if (suggestion && suggestion.suggestedWeight != null) {
       setAiSuggestions((prev) => ({
         ...prev,
-        [we.id]: `AI Target: ${suggestion.suggestedWeight} ${unit} × ${suggestion.suggestedReps} reps (${suggestion.recommendation})`,
+        [we.id]: `AI Target: ${suggestion.suggestedWeight} ${unit} × ${suggestion.suggestedReps} reps — ${suggestion.reasoning}`,
       }));
 
       const updatedExercises = activeWorkout.exercises.map((item) => {
@@ -214,7 +220,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
           if (!s.completed && s.type === 'working') {
             return {
               ...s,
-              weight: suggestion.suggestedWeight || s.weight,
+              weight: suggestion.suggestedWeight ?? s.weight,
               reps: suggestion.suggestedReps || s.reps,
             };
           }

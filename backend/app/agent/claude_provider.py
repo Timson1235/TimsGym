@@ -111,23 +111,19 @@ def run_claude_agent(
     tools: list[dict],
     handle_tool: Callable[[str, dict, str], str],
     on_trace_step: Callable[[dict], None] | None = None,
-    force_tool_name: str | None = None,
     max_steps: int = 4,
     timeout_seconds: float = 45,
+    debug_payloads: bool = False,
 ) -> dict:
-    selected_tools = (
-        [tool for tool in tools if tool["name"] == force_tool_name]
-        if force_tool_name else tools
-    )
-    claude_tools = [
-        {
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "input_schema": _normalize_schema(tool["parameters"]),
-            "strict": True,
-        }
-        for tool in selected_tools
-    ]
+    # The full coaching toolset exceeds the provider's strict optional-field
+    # limit. Ordinary tool calling keeps all tools available without grammar
+    # compilation; the application handlers remain responsible for validation.
+    claude_tools = [{
+        "name": tool["name"],
+        "description": tool.get("description", ""),
+        "input_schema": _normalize_schema(tool["parameters"]),
+        "strict": False,
+    } for tool in tools]
     conversation = list(messages)
     usage = {
         "provider": "claude",
@@ -145,19 +141,16 @@ def run_claude_agent(
         payload = {
             "model": model,
             "max_tokens": 4096,
-            "system": (
-                system_instruction
-                + (f"\n\nMANDATORY FOR THIS TURN: Call {force_tool_name}. "
-                   "Do not answer with text instead." if force_tool_name else "")
-            ),
+            "system": system_instruction,
             "messages": conversation,
             "tools": claude_tools,
         }
-        if step == 0 and force_tool_name:
-            payload["tool_choice"] = {
-                "type": "auto",
-                "disable_parallel_tool_use": True,
-            }
+        if debug_payloads:
+            # Opt-in only: the payload contains the full prompt and user data.
+            print(json.dumps(
+                {"event": "ai_debug_payload", "provider": "claude", "step": step + 1, "payload": payload},
+                ensure_ascii=False,
+            ))
 
         request = Request(
             "https://api.anthropic.com/v1/messages",
@@ -198,6 +191,8 @@ def run_claude_agent(
 
         content = result.get("content", [])
         tool_calls = [block for block in content if block.get("type") == "tool_use"]
+        trace_step["stopReason"] = result.get("stop_reason")
+        trace_step["toolCalls"] = [call.get("name", "") for call in tool_calls]
         if not tool_calls:
             text = "\n".join(
                 block.get("text", "")

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.7-flash"
     GEMINI_LAST_RESORT_MODEL: str = "gemini-2.5-flash"
+    # Prints the full model payload (system prompt, messages, tools) to stdout.
+    # Contains personal training data, so keep it off outside of debugging.
+    AI_DEBUG_PROMPTS: bool = False
 
     @property
     def database_url(self) -> str:

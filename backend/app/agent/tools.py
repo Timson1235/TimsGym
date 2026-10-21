@@ -76,7 +76,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "start_workout_session",
-        "description": "Create the confirmation card for the latest fully agreed workout. Call only after the user explicitly confirms the text draft.",
+        "description": "Show the user a workout card with the structured workout; the user starts it with the card's 'Workout starten' button, so calling this never starts a session by itself. Call it once the user agrees to a workout plan you wrote in text in this conversation, in any wording, also when they ask to start or train a plan from several messages earlier. Use the latest version of that plan including every later correction. Calling it again replaces the previous card.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -320,6 +320,8 @@ def handle_start_workout_session(session: Session, user_id: int, db: dict, args:
 
 def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
     active_workout_state = kwargs.get("active_workout_state")
+    if not active_workout_state or not isinstance(active_workout_state.get("exercises"), list):
+        raise ValueError("No active workout. Start a workout before logging a set.")
     ex_name = (args.get("exercise_name") or "Exercise").strip()
     weight = float(args.get("weight", 0))
     reps = int(args.get("reps", 0))
@@ -362,8 +364,7 @@ def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwarg
             pending["reps"] = reps
             pending["type"] = set_type
             pending["completed"] = True
-            if rpe is not None:
-                pending["rpe"] = rpe
+            pending["rpe"] = rpe
             if notes:
                 pending["notes"] = notes
         else:
@@ -373,7 +374,7 @@ def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwarg
                 "type": set_type,
                 "weight": weight,
                 "reps": reps,
-                "rpe": rpe or 8,
+                "rpe": rpe,
                 "completed": True,
                 "notes": notes,
             }
@@ -413,6 +414,9 @@ def handle_correct_log(session: Session, user_id: int, db: dict, args: dict, **k
                         target_set["rpe"] = round(10.0 - float(new_rir), 1)
                     corrected = True
                     break
+
+    if not corrected:
+        raise ValueError("Set not found in the active workout; nothing was corrected.")
 
     return {
         "type": "log_corrected",

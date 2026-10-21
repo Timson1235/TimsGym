@@ -16,7 +16,6 @@ from ..config import settings
 from ..models import Message
 from ..agent.claude_provider import generate_claude_text
 from .flags import flags
-from .store import embed, to_vec_literal
 
 _client: Optional[genai.Client] = None
 if settings.GEMINI_API_KEY:
@@ -103,14 +102,15 @@ def summarize_conversation(
     summary_text = (data.get("summary") or transcript[:500]).strip()
     description = (data.get("description") or "Recent training conversation").strip()[:120]
 
+    # Context uses chronological text summaries, not vector retrieval.
+    # Persist without requiring the embedding provider.
     summary_id = uuid.uuid4().hex[:8]
-    vec = embed(summary_text)
     session.exec(
         text("INSERT INTO summaries (id, user_id, thread_id, description, summary_text, full_content, embedding) "
              "VALUES (:id, :uid, :tid, :desc, :sum, :full, (:emb)::vector)"),
         params={"id": summary_id, "uid": user_id, "tid": thread_id, "desc": description,
                 "sum": summary_text, "full": transcript,
-                "emb": to_vec_literal(vec) if vec else None},
+                "emb": None},
     )
     for m in rows:
         m.summary_id = summary_id

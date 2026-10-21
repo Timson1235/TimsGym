@@ -33,6 +33,43 @@ export default function App() {
   // Active Workout Session state
   const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
 
+  const [workoutOwner, setWorkoutOwner] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState('');
+
+  // Restore only this account's unfinished workout before enabling autosave.
+  useEffect(() => {
+    if (loading || (!currentUser && !guestMode)) return;
+    const key = `timsgym:active-workout:${currentUser?.uid || 'guest'}`;
+    if (workoutOwner === key) return;
+    setWorkoutOwner(null);
+    try {
+      const saved = localStorage.getItem(key);
+      const draft = saved ? JSON.parse(saved) : null;
+      if (draft && (typeof draft.id !== 'string' || !Array.isArray(draft.exercises))) {
+        throw new Error('Invalid saved workout');
+      }
+      setActiveWorkout(draft);
+      if (draft) setActiveTab('active-workout');
+      setDraftError('');
+      setWorkoutOwner(key);
+    } catch {
+      setActiveWorkout(null);
+      setDraftError('Could not restore your saved workout. Reload to try again.');
+    }
+  }, [loading, currentUser?.uid, guestMode]);
+
+  useEffect(() => {
+    const key = `timsgym:active-workout:${currentUser?.uid || 'guest'}`;
+    if (loading || workoutOwner !== key) return;
+    try {
+      if (activeWorkout) localStorage.setItem(key, JSON.stringify(activeWorkout));
+      else localStorage.removeItem(key);
+      setDraftError('');
+    } catch {
+      setDraftError('Workout changes could not be saved on this device. Keep this page open.');
+    }
+  }, [activeWorkout, loading, currentUser?.uid, guestMode, workoutOwner]);
+
   // Modals state
   const [aiInitialPrompt, setAiInitialPrompt] = useState<string>('');
   
@@ -101,7 +138,7 @@ export default function App() {
       isCompleted: false,
     };
 
-    setActiveWorkout(newSession);
+    setActiveWorkout({ ...newSession, startTime: new Date().toISOString() });
     setActiveTab('active-workout');
   };
 
@@ -153,7 +190,7 @@ export default function App() {
       isCompleted: false,
     };
 
-    setActiveWorkout(newSession);
+    setActiveWorkout({ ...newSession, startTime: new Date().toISOString() });
     setActiveTab('active-workout');
   };
 
@@ -171,9 +208,10 @@ export default function App() {
     <AICoachMainView
       db={db}
       activeWorkout={activeWorkout}
+      onUpdateActiveWorkout={(updated) => setActiveWorkout((current) => current?.id === updated.id ? updated : current)}
       onUpdateDatabase={(updatedDb) => setDb(updatedDb)}
       onStartWorkoutSession={(session) => {
-        setActiveWorkout(session);
+        setActiveWorkout({ ...session, startTime: new Date().toISOString() });
         setActiveTab('active-workout');
       }}
       onSelectTab={setActiveTab}
@@ -227,6 +265,8 @@ export default function App() {
         user={currentUser}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
+
+      {draftError && <p role="alert" className="px-4 py-2 text-sm text-amber-800 bg-amber-50">{draftError}</p>}
 
       {/* Main Content Area */}
       <main className={activeTab === 'ai-coach'

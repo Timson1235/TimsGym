@@ -25,7 +25,7 @@ export async function fetchDatabase(): Promise<DatabaseState> {
     return data;
   } catch (error) {
     console.warn('API fetch failed, reading fallback local cache:', error);
-    const cached = localStorage.getItem('gym_db_cache');
+    const cached = localStorage.getItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`);
     if (cached) return JSON.parse(cached);
     throw error;
   }
@@ -41,7 +41,7 @@ export async function saveWorkoutApi(workout: WorkoutSession): Promise<DatabaseS
     });
     if (!res.ok) throw new Error('Failed to save workout');
     const data = await res.json();
-    localStorage.setItem('gym_db_cache', JSON.stringify(data.db));
+    localStorage.setItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`, JSON.stringify(data.db));
     return data.db;
   } catch (error) {
     console.error('Error saving workout:', error);
@@ -58,7 +58,7 @@ export async function deleteWorkoutApi(id: string): Promise<DatabaseState> {
     });
     if (!res.ok) throw new Error('Failed to delete workout');
     const data = await res.json();
-    localStorage.setItem('gym_db_cache', JSON.stringify(data.db));
+    localStorage.setItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`, JSON.stringify(data.db));
     return data.db;
   } catch (error) {
     console.error('Error deleting workout:', error);
@@ -76,7 +76,7 @@ export async function saveExerciseApi(exercise: Exercise): Promise<DatabaseState
     });
     if (!res.ok) throw new Error('Failed to save exercise');
     const data = await res.json();
-    localStorage.setItem('gym_db_cache', JSON.stringify(data.db));
+    localStorage.setItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`, JSON.stringify(data.db));
     return data.db;
   } catch (error) {
     console.error('Error saving exercise:', error);
@@ -94,7 +94,7 @@ export async function updateProfileApi(profile: Partial<UserProfile>): Promise<D
     });
     if (!res.ok) throw new Error('Failed to update profile');
     const data = await res.json();
-    localStorage.setItem('gym_db_cache', JSON.stringify(data.db));
+    localStorage.setItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`, JSON.stringify(data.db));
     return data.db;
   } catch (error) {
     console.error('Error updating profile:', error);
@@ -125,7 +125,7 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
     });
     if (!res.ok) throw new Error('Failed to reset database');
     const data = await res.json();
-    localStorage.setItem('gym_db_cache', JSON.stringify(data.db));
+    localStorage.setItem(`gym_db_cache:${auth.currentUser?.uid || 'guest'}`, JSON.stringify(data.db));
     return data.db;
   } catch (error) {
     console.error('Error resetting database:', error);
