@@ -1,5 +1,21 @@
 import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
 import { auth } from './firebase';
+import { createGuestDatabase } from '../db/guest';
+
+const guestCacheKey = 'gym_db_cache:guest';
+
+function readGuestDatabase(): DatabaseState {
+  const cached = localStorage.getItem(guestCacheKey);
+  if (cached) return JSON.parse(cached) as DatabaseState;
+  const database = createGuestDatabase();
+  localStorage.setItem(guestCacheKey, JSON.stringify(database));
+  return database;
+}
+
+function writeGuestDatabase(database: DatabaseState): DatabaseState {
+  localStorage.setItem(guestCacheKey, JSON.stringify(database));
+  return database;
+}
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -17,6 +33,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 export async function fetchDatabase(): Promise<DatabaseState> {
+  if (!auth.currentUser) return readGuestDatabase();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/db', { headers });
@@ -32,6 +49,10 @@ export async function fetchDatabase(): Promise<DatabaseState> {
 }
 
 export async function saveWorkoutApi(workout: WorkoutSession): Promise<DatabaseState> {
+  if (!auth.currentUser) {
+    const database = readGuestDatabase();
+    return writeGuestDatabase({ ...database, workouts: [workout, ...database.workouts] });
+  }
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/db/workout', {
@@ -50,6 +71,13 @@ export async function saveWorkoutApi(workout: WorkoutSession): Promise<DatabaseS
 }
 
 export async function deleteWorkoutApi(id: string): Promise<DatabaseState> {
+  if (!auth.currentUser) {
+    const database = readGuestDatabase();
+    return writeGuestDatabase({
+      ...database,
+      workouts: database.workouts.filter((workout) => workout.id !== id),
+    });
+  }
   try {
     const headers = await getAuthHeaders();
     const res = await fetch(`/api/db/workout/${id}`, {
@@ -67,6 +95,11 @@ export async function deleteWorkoutApi(id: string): Promise<DatabaseState> {
 }
 
 export async function saveExerciseApi(exercise: Exercise): Promise<DatabaseState> {
+  if (!auth.currentUser) {
+    const database = readGuestDatabase();
+    const exercises = database.exercises.filter((item) => item.id !== exercise.id);
+    return writeGuestDatabase({ ...database, exercises: [...exercises, exercise] });
+  }
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/db/exercise', {
@@ -85,6 +118,13 @@ export async function saveExerciseApi(exercise: Exercise): Promise<DatabaseState
 }
 
 export async function updateProfileApi(profile: Partial<UserProfile>): Promise<DatabaseState> {
+  if (!auth.currentUser) {
+    const database = readGuestDatabase();
+    return writeGuestDatabase({
+      ...database,
+      profile: { ...database.profile, ...profile },
+    });
+  }
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/db/profile', {
@@ -117,6 +157,9 @@ export async function removePersonalMemoryApi(currentProfile: UserProfile, memor
 }
 
 export async function resetDatabaseApi(): Promise<DatabaseState> {
+  if (!auth.currentUser) {
+    return writeGuestDatabase(createGuestDatabase());
+  }
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/db/reset', {

@@ -3,7 +3,7 @@ import { db } from './index.ts';
 import { users, profiles, exercises, workouts } from './schema.ts';
 import { DatabaseState, Exercise, WorkoutSession, UserProfile } from '../types.ts';
 
-const DEFAULT_SEED_EXERCISES: Omit<Exercise, 'personalRecord'>[] = [
+export const DEFAULT_SEED_EXERCISES: Omit<Exercise, 'personalRecord'>[] = [
   {
     id: "ex_1",
     name: "Barbell Bench Press",
@@ -86,7 +86,7 @@ const DEFAULT_SEED_EXERCISES: Omit<Exercise, 'personalRecord'>[] = [
   }
 ];
 
-const DEFAULT_TEMPLATES = [
+export const DEFAULT_TEMPLATES = [
   {
     id: "tpl_1",
     name: "Push Day (Chest, Shoulders, Triceps)",
