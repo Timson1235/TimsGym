@@ -40,6 +40,20 @@ class CoachToolSelectionTests(unittest.TestCase):
                 patch.object(coach, "run_claude_agent", side_effect=fake_agent):
             return coach.run_chat(None, SimpleNamespace(id=1), message, active_workout)
 
+    def test_failed_final_generation_does_not_replay_a_mutation_on_gemini(self):
+        workout = {"id": "active", "exercises": []}
+        def failing_agent(**kwargs):
+            kwargs["handle_tool"]("log_set", {
+                "exercise_name": "Barbell Back Squat", "weight": 65,
+                "reps": 5, "set_type": "working",
+            }, "call_1")
+            raise RuntimeError("Connection lost after tool execution")
+        with patch.object(coach, "_generate_with_retry") as fallback:
+            result = self.run_chat("65 mal 5", [], failing_agent, workout)
+        fallback.assert_not_called()
+        self.assertEqual(len(result["actionsExecuted"]), 1)
+        self.assertEqual(result["actionsExecuted"][0]["type"], "set_logged")
+
     def test_logged_set_is_returned_to_workout_ui_without_inventing_rpe(self):
         workout = {"id": "active", "exercises": []}
 

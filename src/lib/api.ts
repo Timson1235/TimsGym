@@ -1,5 +1,6 @@
 import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
 import { auth } from './firebase';
+import { readChatStream, type ChatStreamEvent } from './chatStream';
 import { cacheChatHistory, removeCachedChat, readChatCache } from './chatCache';
 import { createGuestDatabase } from '../db/guest';
 
@@ -177,16 +178,19 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
   }
 }
 
-export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string) {
+export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string, onEvent?: (event: ChatStreamEvent) => void) {
   const requestStarted = performance.now();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, activeWorkoutState, threadId }),
+      body: JSON.stringify({ message, activeWorkoutState, threadId, stream: Boolean(onEvent) }),
     });
-    const payload = await res.json().catch(() => ({}));
+    if (onEvent && !res.ok) throw new Error(`Coach request failed (HTTP ${res.status})`);
+    const payload = res.headers.get('Content-Type')?.includes('text/event-stream') && onEvent
+      ? await readChatStream(res, onEvent)
+      : await res.json().catch(() => ({}));
     if (!res.ok) {
       console.error('AI Chat request failed:', res.status, payload.error);
       return {
@@ -210,6 +214,7 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
     return payload;
   } catch (error: any) {
     console.error('AI Chat Error:', error);
+    if (onEvent) throw error;
     return { reply: "Sorry, I couldn't reach the AI Coach right now. Please verify server connection." };
   }
 }

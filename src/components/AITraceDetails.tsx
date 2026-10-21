@@ -33,6 +33,9 @@ export const AITraceDetails: React.FC<{ trace: AITrace; dark?: boolean }> = ({
       </summary>
 
       <div className="mt-2 space-y-1.5">
+        {trace.firstTextMs != null && (
+          <div className="text-xs text-slate-500">Erster Text nach {formatDuration(trace.firstTextMs)}</div>
+        )}
         {trace.steps.map((step, index) => (
           <div key={`${step.kind}-${step.name}-${index}`} className="grid grid-cols-[minmax(0,1fr)_48px] gap-2 items-center">
             <div className="min-w-0">

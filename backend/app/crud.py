@@ -129,7 +129,10 @@ def get_user_database_state(session: Session, user_id: int) -> dict:
             for e in DEFAULT_SEED_EXERCISES
         ]
 
-    workout_rows = session.exec(select(Workout).where(Workout.user_id == user_id)).all()
+    workout_rows = session.exec(
+        select(Workout).where(Workout.user_id == user_id)
+        .order_by(Workout.date.desc(), Workout.created_at.desc().nulls_last(), Workout.id.desc())
+    ).all()
     workouts_out = [_workout_out(w) for w in workout_rows]
 
     # Remap template exercise IDs to this user's exercise IDs (match by name).

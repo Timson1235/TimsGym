@@ -73,6 +73,8 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [streamStatus, setStreamStatus] = useState('Thinking through your request…');
   const [isSwitchingThread, setIsSwitchingThread] = useState(false);
   const [threadError, setThreadError] = useState('');
   const threadRequest = useRef(0);
@@ -201,7 +203,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     if (messages.length > 1 || isLoading) {
       scrollToBottom();
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, streamingText]);
 
   useEffect(() => {
     if (initialPrompt && activeThreadId && !isSwitchingThread && initialPrompt !== handledPromptRef.current) {
@@ -227,9 +229,18 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     if (!textToSend) setInputMessage('');
     setIsLoading(true);
+    setStreamingText('');
+    setStreamStatus('Connecting to the coach…');
 
     try {
-      const response = await sendAIChatMessage(text, activeWorkout, activeThreadId);
+      const response = await sendAIChatMessage(text, activeWorkout, activeThreadId, (event) => {
+        if (request !== threadRequest.current) return;
+        if (event.type === 'delta') {
+          setStreamingText((current) => current + event.text);
+          setStreamStatus('Writing your answer…');
+        } else if (event.type === 'reset') setStreamingText('');
+        else if (event.type === 'status') setStreamStatus(event.message);
+      });
       if (request !== threadRequest.current) return;
 
       if (response.usage) {
@@ -287,12 +298,15 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       const errorMsg: AIChatMessage = {
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
-        content: "Der AI-Coach ist gerade nicht erreichbar. Bitte prüfe die Serververbindung und versuche es erneut.",
+        content: "Die Verbindung zum Coach wurde unterbrochen. Änderungen könnten bereits gespeichert sein. Lade den Chat neu und prüfe dein Workout, bevor du die Anfrage wiederholst.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
-      if (request === threadRequest.current) setIsLoading(false);
+      if (request === threadRequest.current) {
+        setIsLoading(false);
+        setStreamingText('');
+      }
     }
   };
 
@@ -495,6 +509,16 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
             </motion.div>
             </AnimatePresence>
 
+            {isLoading && streamingText && (
+              <div className="flex gap-2.5 justify-start" aria-live="polite">
+                <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0">
+                  <Bot className="h-3.5 w-3.5" />
+                </div>
+                <div className="min-w-0 max-w-[90%] rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm leading-relaxed">
+                  <ChatMarkdown content={streamingText} />
+                </div>
+              </div>
+            )}
             {isLoading && (
               <div className="flex gap-2.5 justify-start">
                 <div className="w-7 h-7 rounded-lg bg-brand-50 border border-brand-200 text-brand-700 flex items-center justify-center flex-shrink-0">
@@ -503,7 +527,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <div className="flex items-center gap-2 rounded-lg rounded-tl-none border border-slate-200 bg-white px-3.5 py-2 shadow-xs">
                   <Loader2 className="h-3.5 w-3.5 text-brand-600 animate-spin" />
                   <span className="text-xs text-slate-500 font-medium">
-                    Thinking through this...
+                    {streamStatus}
                   </span>
                 </div>
               </div>

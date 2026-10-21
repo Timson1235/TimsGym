@@ -32,7 +32,24 @@ window.fetch = async (input, init) => {
   if (url.endsWith('/usage')) body = null;
   if (url.includes('/sessions')) body = { sessions };
   if (url.includes('/history')) body = { messages: [{ ...makeMessage('Fresh server history'), createdAt: '2026-10-21T12:00:00Z' }] };
-  if (url.endsWith('/chat') && init?.method === 'POST') body = { reply: 'New reply must survive the delayed refresh' };
+  if (url.endsWith('/chat') && init?.method === 'POST') {
+    body = { reply: 'New reply must survive the delayed refresh' };
+    if (JSON.parse(String(init.body)).stream) {
+      const result = body;
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({ async start(controller) {
+        const send = (event: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        send({ type: 'status', message: 'Checking previous workouts…' });
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        send({ type: 'delta', text: 'New reply must ' });
+        await new Promise((resolve) => setTimeout(resolve, 2400));
+        send({ type: 'delta', text: 'survive the delayed refresh' });
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        send({ type: 'final', result });
+        controller.close();
+      } }), { headers: { 'Content-Type': 'text/event-stream' } });
+    }
+  }
   return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 };
 

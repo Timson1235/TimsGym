@@ -157,6 +157,7 @@ export interface AITrace {
   requestId: string;
   totalMs: number;
   roundTripMs?: number;
+  firstTextMs?: number | null;
   agentSteps: number;
   modelMs: number;
   toolMs: number;
