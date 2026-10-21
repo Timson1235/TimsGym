@@ -102,12 +102,13 @@ export interface AIChatMessage {
   usage?: AIUsage;
   trace?: AITrace;
   suggestedAction?: {
-    type: 'apply_weight' | 'add_exercise' | 'start_routine';
+    type: 'apply_weight' | 'add_exercise' | 'start_routine' | 'workout_proposed';
     exerciseId?: string;
     exerciseName?: string;
     weight?: number;
     reps?: number;
     routineId?: string;
+    workout?: WorkoutSession;
   };
 }
 

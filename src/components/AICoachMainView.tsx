@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Sparkles, Send, Bot, User, Loader2, Dumbbell, 
+  Sparkles, Send, Bot, User, Loader2,
   CheckCircle2, Play, ArrowRight, Zap,
   Trash2, Plus, MessagesSquare
 } from 'lucide-react';
-import { DatabaseState, WorkoutSession, WorkoutSet, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
+import { DatabaseState, WorkoutSession, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
 import {
   createAIChatSession,
   deleteAIChatSession,
@@ -42,27 +42,17 @@ const DEFAULT_WELCOME_MSG: AIChatMessage = {
   timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 };
 
-function formatSetScheme(sets: WorkoutSet[]): string {
-  const groups: Array<{ count: number; set: WorkoutSet }> = [];
-  for (const set of sets) {
-    const previous = groups[groups.length - 1];
-    if (
-      previous
-      && previous.set.weight === set.weight
-      && previous.set.reps === set.reps
-      && previous.set.type === set.type
-    ) {
-      previous.count += 1;
-    } else {
-      groups.push({ count: 1, set });
-    }
-  }
+function attachWorkoutProposal(messages: AIChatMessage[], workout: WorkoutSession | null): AIChatMessage[] {
+  if (!workout) return messages;
+  const lastAssistantIndex = messages.reduce(
+    (lastIndex, message, index) => message.role === 'assistant' ? index : lastIndex,
+    -1,
+  );
+  if (lastAssistantIndex < 0) return messages;
 
-  return groups.map(({ count, set }) => {
-    const load = set.weight > 0 ? ` @ ${set.weight} kg` : ' Körpergewicht';
-    const type = set.type === 'warmup' ? ' (WU)' : '';
-    return `${count} × ${set.reps}${load}${type}`;
-  }).join(' + ');
+  return messages.map((message, index) => index === lastAssistantIndex
+    ? { ...message, suggestedAction: { type: 'workout_proposed' as const, workout } }
+    : message);
 }
 
 export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
@@ -82,7 +72,6 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [threadError, setThreadError] = useState('');
   const threadRequest = useRef(0);
   const [lastAction, setLastAction] = useState<any>(null);
-  const [proposedWorkout, setProposedWorkout] = useState<WorkoutSession | null>(null);
   const [sessionUsage, setSessionUsage] = useState(EMPTY_AI_USAGE);
   const [accountUsage, setAccountUsage] = useState<AIUsageSummary | null>(null);
   const [chatSessions, setChatSessions] = useState<AIChatSession[]>([]);
@@ -99,14 +88,15 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     try {
     const history = await fetchAIChatHistory(threadId);
     if (request !== threadRequest.current) return;
-    setMessages([DEFAULT_WELCOME_MSG, ...history]);
+    let savedProposal: WorkoutSession | null = null;
+    try {
+      const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${threadId}`);
+      savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
+    } catch { savedProposal = null; }
+    setMessages([DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)]);
     setActiveThreadId(threadId);
     localStorage.setItem('active_ai_thread_id', threadId);
     setLastAction(null);
-    try {
-      const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${threadId}`);
-      setProposedWorkout(saved ? JSON.parse(saved) : null);
-    } catch { setProposedWorkout(null); }
     setSessionUsage(EMPTY_AI_USAGE);
     } catch {
       if (request === threadRequest.current) setThreadError('Could not load this chat. Please try again.');
@@ -116,7 +106,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   };
 
   const dismissProposal = () => {
-    setProposedWorkout(null);
+    setMessages((current) => current.map((message) => ({
+      ...message,
+      suggestedAction: message.suggestedAction?.type === 'workout_proposed'
+        ? undefined
+        : message.suggestedAction,
+    })));
     try {
       localStorage.removeItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`);
     } catch { /* Storage may be unavailable. */ }
@@ -139,11 +134,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         const history = await fetchAIChatHistory(selected.id);
         if (!cancelled) {
           setActiveThreadId(selected.id);
+          let savedProposal: WorkoutSession | null = null;
           try {
             const saved = localStorage.getItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${selected.id}`);
-            setProposedWorkout(saved ? JSON.parse(saved) : null);
-          } catch { setProposedWorkout(null); }
-          setMessages([DEFAULT_WELCOME_MSG, ...history]);
+            savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
+          } catch { savedProposal = null; }
+          setMessages([DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)]);
         }
       })
       .catch((error) => console.error('Failed to load chat sessions:', error));
@@ -206,11 +202,13 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         onUpdateActiveWorkout(response.activeWorkoutState);
       }
 
-      for (const action of response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : [])) {
+      const actions = response.actionsExecuted || (response.actionExecuted ? [response.actionExecuted] : []);
+      const workoutProposal = actions.find((action: any) => action.type === 'workout_proposed');
+
+      for (const action of actions) {
         setLastAction(action);
         if (action.type === 'workout_proposed') {
           // Show a proposal card with a confirm button — do NOT auto-start.
-          setProposedWorkout(action.data);
           try {
             localStorage.setItem(`timsgym:proposal:${auth.currentUser?.uid || 'guest'}:${activeThreadId}`, JSON.stringify(action.data));
           } catch { /* The current card remains usable when browser storage is full. */ }
@@ -225,6 +223,9 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         toolsUsed: response.toolsUsed,
         usage: response.usage,
         trace: response.trace,
+        suggestedAction: workoutProposal
+          ? { type: 'workout_proposed', workout: workoutProposal.data }
+          : undefined,
       };
 
       if (response.historyCompacted && activeThreadId) {
@@ -304,7 +305,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       <div className="overflow-hidden bg-white/80">
 
         {/* Left 2-Cols: Pastel Light AI Chat Workspace */}
-        <div className="flex h-[calc(100dvh-9rem)] min-h-80 flex-col md:h-[calc(100dvh-4rem)]">
+        <div className="flex h-[calc(100dvh-9rem)] min-h-80 flex-col overflow-hidden md:h-[calc(100dvh-4rem)]">
           
           {/* Chat Stream Header - Light Theme */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/70 px-4 py-3 sm:px-5">
@@ -393,6 +394,22 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     variant={msg.role === 'user' ? 'user' : 'light'}
                   />
 
+                  {msg.role === 'assistant'
+                    && msg.suggestedAction?.type === 'workout_proposed'
+                    && msg.suggestedAction.workout && (
+                    <button
+                      onClick={() => {
+                        const workout = msg.suggestedAction?.workout;
+                        if (!workout) return;
+                        dismissProposal();
+                        onStartWorkoutSession(workout);
+                      }}
+                      className="app-primary mt-3 flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
+                    >
+                      <Play className="h-3.5 w-3.5" /> Workout starten
+                    </button>
+                  )}
+
                   {msg.role === 'assistant' && msg.toolsUsed && msg.toolsUsed.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {msg.toolsUsed.map((t, i) => (
@@ -443,49 +460,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
             )}
           </div>
 
-          {/* Workout Proposal Card — user confirms before it actually starts */}
-          <AnimatePresence>
-          {proposedWorkout && (
-            <motion.div
-              className="mx-4 mb-1 mt-2 rounded-lg border border-brand-200 bg-brand-50/70 p-3 shadow-sm"
-              initial={reduceMotion ? false : { opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
-              transition={reduceMotion ? { duration: 0 } : { type: 'spring', bounce: 0, duration: 0.3 }}
-            >
-              <div className="flex items-center gap-1.5 mb-2 text-brand-800">
-                <Dumbbell className="h-4 w-4" />
-                <span className="text-sm font-semibold">Workout proposal: {proposedWorkout.title}</span>
-              </div>
-              <ul className="space-y-1 mb-3">
-                {proposedWorkout.exercises.map((ex, i) => (
-                  <li key={i} className="flex items-start justify-between gap-3 text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-200">
-                    <span className="font-medium">{ex.exerciseName}</span>
-                    <span className="text-right text-slate-500 font-mono leading-relaxed">{formatSetScheme(ex.sets)}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => { dismissProposal(); onStartWorkoutSession(proposedWorkout); }}
-                  className="app-primary flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold shadow-sm"
-                >
-                  <Play className="h-3.5 w-3.5" /> Workout starten
-                </button>
-                <button
-                  onClick={dismissProposal}
-                  className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  Verwerfen
-                </button>
-              </div>
-              <p className="mt-2 text-center text-xs text-slate-500">To change it, just tell me what to adjust.</p>
-            </motion.div>
-          )}
-
-          </AnimatePresence>
-
-          {/* Action Confirmation Banner (proposals use the card above instead) */}
+          {/* Action Confirmation Banner for non-workout actions */}
           {lastAction && lastAction.type !== 'workout_proposed' && (
             <div className="px-4 py-2 bg-brand-50 border-t border-b border-brand-200 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5 text-brand-800 font-medium">
