@@ -1,5 +1,5 @@
 import React from 'react';
-import { Dumbbell, History, LineChart, Sparkles, Play, LogIn, LogOut, Settings, User as UserIcon } from 'lucide-react';
+import { Dumbbell, History, LineChart, Sparkles, Play, LogIn, LogOut, Settings, Activity, User as UserIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { WorkoutSession } from '../types';
 import { User, signInWithPopup, signOut } from 'firebase/auth';
@@ -16,6 +16,7 @@ interface NavbarProps {
   onOpenAICoach: () => void;
   onOpenSettings: () => void;
   user?: User | null;
+  canInspectTraces?: boolean;
 }
 
 const tabs: Array<{ id: AppTab; label: string; shortLabel: string; icon: typeof Sparkles }> = [
@@ -26,7 +27,7 @@ const tabs: Array<{ id: AppTab; label: string; shortLabel: string; icon: typeof 
   { id: 'analytics', label: 'Progress', shortLabel: 'Progress', icon: LineChart },
 ];
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeWorkout, user, onOpenSettings }) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeWorkout, user, canInspectTraces = false, onOpenSettings }) => {
   const reduceMotion = useReducedMotion();
 
   const handleGoogleSignIn = async () => {
@@ -93,6 +94,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, activeW
           </nav>
 
           <div className="flex flex-none items-center gap-1.5">
+            {user && canInspectTraces && <a href="/?view=traces" target="_blank" rel="noreferrer" aria-label="Execution traces" title="Inspect live execution traces" className="app-icon-button text-slate-600 hover:bg-slate-100"><Activity className="h-5 w-5" /></a>}
             <button onClick={onOpenSettings} aria-label="Settings" title="Settings" className="app-icon-button text-slate-600 hover:bg-slate-100"><Settings className="h-5 w-5" /></button>
             {user ? (
               <>

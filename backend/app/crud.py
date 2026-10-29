@@ -209,7 +209,8 @@ def save_user_workout(session: Session, user_id: int, w: dict) -> None:
     existing.total_volume = w.get("totalVolume", 0)
     existing.is_completed = w.get("isCompleted", True)
     existing.notes = w.get("notes")
-    existing.exercises_data = w.get("exercises", [])
+    from .agent.progression import validate_exercises
+    existing.exercises_data = validate_exercises(w.get("exercises", []), w["id"])
     session.add(existing)
     session.commit()
 

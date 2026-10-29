@@ -718,6 +718,26 @@ async function startServer() {
   }
 
   // API Routes
+  // Legacy Node entry point: enforce the same private-beta boundary as FastAPI.
+  app.use('/api', async (req, res, next) => {
+    if (req.path === '/health') return next();
+    const bearer = req.headers.authorization;
+    if (!bearer?.startsWith('Bearer ')) return res.status(401).json({error: 'Authentication required'});
+    try {
+      const claims = await adminAuth.verifyIdToken(bearer.slice(7));
+      const allowedUid = process.env.APP_ALLOWED_UID ?? '30GTsmJWxpSVCSNwONCmz26dGE53';
+      if (!allowedUid || claims.uid !== allowedUid) return res.status(403).json({error: 'Private app access only'});
+      next();
+    } catch {
+      return res.status(401).json({error: 'Invalid authentication'});
+    }
+  });
+  app.get('/api/access', (_req, res) => {
+    // Execution tracing is provided by the production FastAPI backend.
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({canUseApp: true, canInspectTraces: false});
+  });
+
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });

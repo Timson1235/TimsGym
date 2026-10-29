@@ -32,7 +32,7 @@ Usage retains cache creation/read token counts. The response trace also includes
 
 ## Remaining work
 
-Conversation summarization still executes synchronously. Moving it off the response path is separate work. Successful completed answers and tool outcomes are persisted as before. Provider selection, available tools and the four-round limit remain unchanged.
+Successful completed answers and tool outcomes are persisted as before. Conversation summarization has since moved to a durable background worker ([Background summaries](BACKGROUND_SUMMARIES.md)), and tool availability and round limits are now described in [Coach prompts](COACH_PROMPTS.md).
 
 ## Verification
 

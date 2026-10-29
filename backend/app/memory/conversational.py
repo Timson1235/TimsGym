@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlmodel import Session, delete, select
 
-from ..models import ChatSession, Message, ToolLog
+from ..models import ChatSession, Message, ToolLog, SummaryJob
 from .flags import flags
 
 
@@ -34,12 +34,12 @@ def read_recent_messages(session: Session, user_id: int, thread_id: str, limit: 
 
 
 def read_message_history(session: Session, user_id: int, thread_id: str, limit: int = 200) -> list[Message]:
-    """Visible messages in the active context; summarized turns stay archived."""
+    """Visible chat history is independent of model-context compaction."""
     if not flags.conversational:
         return []
     rows = session.exec(
         select(Message)
-        .where(Message.user_id == user_id, Message.thread_id == thread_id, Message.summary_id == None)  # noqa: E711
+        .where(Message.user_id == user_id, Message.thread_id == thread_id)
         .order_by(Message.id.desc())
         .limit(limit)
     ).all()
@@ -47,6 +47,7 @@ def read_message_history(session: Session, user_id: int, thread_id: str, limit: 
 
 
 def clear_message_history(session: Session, user_id: int, thread_id: str) -> None:
+    session.exec(delete(SummaryJob).where(SummaryJob.user_id == user_id, SummaryJob.thread_id == thread_id))
     session.exec(
         delete(Message).where(Message.user_id == user_id, Message.thread_id == thread_id)
     )
@@ -105,6 +106,7 @@ def delete_chat_session(session: Session, user_id: int, thread_id: str) -> bool:
     chat = get_owned_chat_session(session, user_id, thread_id)
     if chat is None:
         return False
+    session.exec(delete(SummaryJob).where(SummaryJob.user_id == user_id, SummaryJob.thread_id == thread_id))
     session.exec(text("DELETE FROM tool_logs WHERE user_id=:uid AND thread_id=:tid"), params={"uid": user_id, "tid": thread_id})
     session.exec(text("DELETE FROM messages WHERE user_id=:uid AND thread_id=:tid"), params={"uid": user_id, "tid": thread_id})
     session.exec(text("DELETE FROM summaries WHERE user_id=:uid AND thread_id=:tid"), params={"uid": user_id, "tid": thread_id})

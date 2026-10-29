@@ -2,12 +2,14 @@
 import time
 import uuid
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlmodel import Session
 
 from ..agent import coach
-from ..auth import current_user
+from .. import tracing
+from ..agent.progression import recommend_progression, workout_review
+from ..auth import current_user, trace_admin
 from ..db import get_session
 from ..memory import conversational as memory
 from ..streaming import stream_events
@@ -91,6 +93,15 @@ def remove_chat_session(
 
 def _execute_chat(payload: dict, user: User, session: Session, on_event=None):
     request_id = str(uuid.uuid4())
+    thread_id = str(payload.get("threadId") or user.id)
+    with tracing.request_trace(session.get_bind(), request_id, user.id, thread_id):
+        with tracing.Span('request', 'Coach request', payload) as span:
+            result = _execute_chat_body(payload, user, session, request_id, on_event)
+            span.output({key: value for key,value in result.items() if key != 'db'})
+            return result
+
+
+def _execute_chat_body(payload: dict, user: User, session: Session, request_id: str, on_event=None):
     request_started = time.perf_counter()
     memory.ensure_default_chat_session(session, user.id)
     thread_id = str(payload.get("threadId") or user.id)
@@ -193,15 +204,51 @@ def usage_summary(
     return read_user_usage_summary(session, user_id=user.id)
 
 
+@router.get("/workout-review/{workout_id}")
+def review_workout(workout_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
+    from .. import crud
+    result = workout_review(crud.get_user_database_state(session, user.id), workout_id)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Workout not found")
+    return result
+
+
 @router.post("/suggest-weight")
-def suggest_weight(
-    payload: dict = Body(...),
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-):
-    return coach.suggest_weight(
-        session, user,
-        exercise_name=payload.get("exerciseName", ""),
-        target_reps=payload.get("targetReps", 8),
-        target_rpe=payload.get("targetRpe", 8),
-    )
+def suggest_weight(payload: dict = Body(...), user: User = Depends(current_user), session: Session = Depends(get_session)):
+    from .. import crud
+    try:
+        result = recommend_progression(crud.get_user_database_state(session, user.id),
+            exercise_id=payload.get("exerciseId"), exercise_name=payload.get("exerciseName", ""),
+            progression=payload.get("progression"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    targets = (result.get("next") or {}).get("sets") or []
+    return {**result, "suggestedWeight": targets[0]["weight"] if targets else None,
+            "suggestedReps": targets[0]["reps"] if targets else None, "recommendation": result["reasoning"]}
+
+
+@router.get("/traces")
+def traces(thread_id: str | None = Query(default=None, alias="threadId"),
+           user: User = Depends(trace_admin), session: Session = Depends(get_session)):
+    return JSONResponse({"traces": tracing.list_traces(session, user.id, thread_id)}, headers={"Cache-Control":"no-store"})
+
+
+@router.get("/traces/{trace_id}")
+def trace_details(trace_id: str, payloads: bool = False,
+                  user: User = Depends(trace_admin), session: Session = Depends(get_session)):
+    result = tracing.read_trace(session, user.id, trace_id, payloads)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return JSONResponse(result, headers={"Cache-Control":"no-store"})
+
+
+@router.get("/traces/{trace_id}/payload/{payload_id}")
+def trace_payload(trace_id: str, payload_id: str,
+                  user: User = Depends(trace_admin), session: Session = Depends(get_session)):
+    from ..models import AgentTracePayload
+    if tracing._owned(session, user.id, trace_id) is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    payload = session.get(AgentTracePayload, payload_id)
+    if payload is None or payload.trace_id != trace_id:
+        raise HTTPException(status_code=404, detail="Payload not found")
+    return JSONResponse({"data":payload.data}, headers={"Cache-Control":"no-store"})

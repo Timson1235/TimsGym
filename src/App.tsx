@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import { 
   DatabaseState, WorkoutSession, Exercise, UserProfile
 } from './types';
 import { 
-  fetchDatabase, saveWorkoutApi, deleteWorkoutApi, saveExerciseApi, updateProfileApi 
+  fetchAppAccess, fetchDatabase, saveWorkoutApi, deleteWorkoutApi, saveExerciseApi, updateProfileApi
 } from './lib/api';
 import { Navbar } from './components/Navbar';
+import { ExecutionTraces } from './components/ExecutionTraces';
 import { AICoachMainView } from './components/AICoachMainView';
+import { ProgressionReview } from './components/ProgressionReview';
+import { repeatWithTargets } from './lib/trainingTargets';
 import { ActiveWorkout } from './components/ActiveWorkout';
 import { WorkoutHistory } from './components/WorkoutHistory';
 import { ExerciseLibrary } from './components/ExerciseLibrary';
@@ -27,10 +30,12 @@ export default function App() {
   const [db, setDb] = useState<DatabaseState | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [guestMode, setGuestMode] = useState<boolean>(false);
+  const [access, setAccess] = useState<{canUseApp:boolean;canInspectTraces:boolean}|null>(null);
+  const [accessError, setAccessError] = useState('');
   const [activeTab, setActiveTab] = useState<AppTab>('ai-coach');
 
   // Active Workout Session state
+  const [reviewWorkoutId, setReviewWorkoutId] = useState<string | null>(null);
   const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
 
   const [workoutOwner, setWorkoutOwner] = useState<string | null>(null);
@@ -38,7 +43,7 @@ export default function App() {
 
   // Restore only this account's unfinished workout before enabling autosave.
   useEffect(() => {
-    if (loading || (!currentUser && !guestMode)) return;
+    if (loading || !currentUser || !access?.canUseApp) return;
     const key = `timsgym:active-workout:${currentUser?.uid || 'guest'}`;
     if (workoutOwner === key) return;
     setWorkoutOwner(null);
@@ -56,11 +61,11 @@ export default function App() {
       setActiveWorkout(null);
       setDraftError('Could not restore your saved workout. Reload to try again.');
     }
-  }, [loading, currentUser?.uid, guestMode]);
+  }, [loading, currentUser?.uid, access?.canUseApp]);
 
   useEffect(() => {
     const key = `timsgym:active-workout:${currentUser?.uid || 'guest'}`;
-    if (loading || workoutOwner !== key) return;
+    if (loading || !currentUser || !access?.canUseApp || workoutOwner !== key) return;
     try {
       if (activeWorkout) localStorage.setItem(key, JSON.stringify(activeWorkout));
       else localStorage.removeItem(key);
@@ -68,7 +73,7 @@ export default function App() {
     } catch {
       setDraftError('Workout changes could not be saved on this device. Keep this page open.');
     }
-  }, [activeWorkout, loading, currentUser?.uid, guestMode, workoutOwner]);
+  }, [activeWorkout, loading, currentUser?.uid, access?.canUseApp, workoutOwner]);
 
   // Modals state
   const [aiInitialPrompt, setAiInitialPrompt] = useState<string>('');
@@ -81,20 +86,34 @@ export default function App() {
 
   // Listen to Auth State Changes and Sync Database
   useEffect(() => {
+    let revision = 0;
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      const request = ++revision;
       setCurrentUser(user);
+      setDb(null);
+      setAccess(null);
+      setAccessError('');
+      setActiveWorkout(null);
+      setWorkoutOwner(null);
       setLoading(true);
+      if (!user) { setLoading(false); return; }
       try {
+        const permission = await fetchAppAccess();
+        if (request !== revision) return;
+        if (!permission.canUseApp) throw new Error('This app is currently private.');
+        setAccess(permission);
         const data = await fetchDatabase();
+        if (request !== revision) return;
         setDb(data);
       } catch (err) {
-        console.error('Failed to load database:', err);
+        if (request !== revision) return;
+        setAccess(null);
+        setAccessError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (request === revision) setLoading(false);
       }
     });
-
-    return () => unsubscribe();
+    return () => { revision++; unsubscribe(); };
   }, []);
 
   if (loading) {
@@ -106,9 +125,24 @@ export default function App() {
     );
   }
 
-  // If user is not logged in and hasn't chosen guest mode, show the Login Gatekeeper Screen
-  if (!currentUser && !guestMode) {
-    return <LoginScreen onGuestContinue={() => setGuestMode(true)} />;
+  if (!currentUser) return <LoginScreen />;
+
+  if (!access?.canUseApp) {
+    return <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+      <section className="max-w-md rounded-2xl border bg-white p-6 text-center">
+        <h1 className="text-xl font-semibold">Private access</h1>
+        <p role="alert" className="my-4 text-sm text-slate-600">{accessError || 'This account does not have access.'}</p>
+        <div className="flex justify-center gap-3">
+          <button className="app-secondary rounded-lg px-4 py-2" onClick={() => window.location.reload()}>Retry</button>
+          <button className="app-primary rounded-lg px-4 py-2" onClick={() => void signOut(auth)}>Sign out</button>
+        </div>
+      </section>
+    </main>;
+  }
+
+  if (currentUser && new URLSearchParams(window.location.search).get('view') === 'traces') {
+    return access.canInspectTraces ? <ExecutionTraces key={currentUser.uid} />
+      : <main className="p-6"><p role="alert">Administrator access required.</p><a href="/">Back to app</a></main>;
   }
 
   if (!db) {
@@ -147,6 +181,7 @@ export default function App() {
     setDb(updatedDb);
     setActiveWorkout(null);
     setActiveTab('history');
+    setReviewWorkoutId(completedSession.id);
   };
 
   const handleCancelWorkout = () => {
@@ -170,27 +205,7 @@ export default function App() {
   };
 
   const handleRepeatWorkout = (session: WorkoutSession) => {
-    const newExercises = session.exercises.map((we, idx) => ({
-      ...we,
-      id: `we_${Date.now()}_${idx}`,
-      sets: we.sets.map((s, sIdx) => ({
-        ...s,
-        id: `set_${Date.now()}_${idx}_${sIdx}`,
-        completed: false,
-      })),
-    }));
-
-    const newSession: WorkoutSession = {
-      id: `wk_${Date.now()}`,
-      title: `${session.title} (Repeat)`,
-      date: new Date().toISOString().split('T')[0],
-      durationMinutes: 0,
-      exercises: newExercises,
-      totalVolume: 0,
-      isCompleted: false,
-    };
-
-    setActiveWorkout({ ...newSession, startTime: new Date().toISOString() });
+    setActiveWorkout(repeatWithTargets(session));
     setActiveTab('active-workout');
   };
 
@@ -243,7 +258,7 @@ export default function App() {
       </section>
     )
   ) : activeTab === 'history' ? (
-    <WorkoutHistory db={db} onDeleteWorkout={handleDeleteWorkout} onRepeatWorkout={handleRepeatWorkout} />
+    <WorkoutHistory db={db} onDeleteWorkout={handleDeleteWorkout} onRepeatWorkout={handleRepeatWorkout} onReviewWorkout={setReviewWorkoutId} />
   ) : activeTab === 'exercises' ? (
     <ExerciseLibrary db={db} onSaveExercise={handleSaveExercise} onAskAICoachAboutExercise={handleQuickAskAI} />
   ) : (
@@ -263,7 +278,7 @@ export default function App() {
         onOpenAICoach={() => {
           setActiveTab('ai-coach');
         }}
-        user={currentUser}
+        user={currentUser} canInspectTraces={access.canInspectTraces}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
@@ -285,6 +300,12 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      {reviewWorkoutId && db.workouts.find((workout) => workout.id === reviewWorkoutId) && (
+        <ProgressionReview workout={db.workouts.find((workout) => workout.id === reviewWorkoutId)!}
+          onClose={() => setReviewWorkoutId(null)}
+          onSave={async (workout) => { const updated = await saveWorkoutApi(workout); setDb(updated); }} />
+      )}
 
       {/* Floating Rest Timer Modal */}
       <AnimatePresence>

@@ -9,12 +9,14 @@ interface WorkoutHistoryProps {
   db: DatabaseState;
   onDeleteWorkout: (id: string) => void;
   onRepeatWorkout: (session: WorkoutSession) => void;
+  onReviewWorkout: (id: string) => void;
 }
 
 export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
   db,
   onDeleteWorkout,
   onRepeatWorkout,
+  onReviewWorkout,
 }) => {
   const { workouts, profile } = db;
   const unit = profile.preferredUnit;
@@ -116,6 +118,9 @@ export const WorkoutHistory: React.FC<WorkoutHistoryProps> = ({
                 >
                   <button className="min-w-0 flex-1 space-y-1 text-left" onClick={() => toggleExpand(w.id)} aria-expanded={isExpanded} aria-controls={`workout-${w.id}`} aria-label={`Show details for ${w.title}`}>
                     <div className="flex items-center gap-2">
+                      <button onClick={() => onReviewWorkout(w.id)} className="app-secondary rounded-lg px-3 py-2 text-sm">
+                        Nächste Ziele
+                      </button>
                       <span className="text-xs font-mono font-bold text-brand-800 flex items-center gap-1">
                         <Calendar className="h-3.5 w-3.5 text-brand-600" />
                         {formatDateString(w.date)}

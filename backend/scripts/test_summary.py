@@ -8,6 +8,8 @@ from sqlmodel import Session, select
 from app.db import engine
 from app.memory import conversational as memory
 from app.memory import summary as summ
+from app.memory import summary_jobs
+from app.models import SummaryJob
 from app.models import Message
 
 T = "test_summary_thread"
@@ -24,17 +26,26 @@ with Session(engine) as s:
     for role, content in convo:
         memory.write_message(s, 1, T, role, content)
 
-    result = summ.summarize_conversation(s, 1, T)
-    print("summary id:", result["id"], "| label:", result["description"])
-    print("messages summarized:", result["num_messages"])
+    summary_jobs.ensure_summary_schema(engine)
+    rows = memory.read_recent_messages(s, 1, T, limit=200)
+    summary_jobs.enqueue_through(s, 1, T, rows[-5].id)
+    claim = summary_jobs.claim_next(s, job_id=summary_jobs._job_id(1, T))
+    if claim is None:
+        raise RuntimeError("Scratch summary job is already being processed")
+    summary_jobs.process_claim(engine, claim)
+    s.expire_all()
+    job = s.get(SummaryJob, summary_jobs._job_id(1, T))
+    print("summary id:", job.summary_id)
+    print("messages summarized through:", job.completed_through_id)
 
     remaining = memory.read_recent_messages(s, 1, T, limit=10)
     print("un-summarized messages left in active context:", len(remaining))
 
     print("\nsummary context block:\n" + summ.read_summary_context(s, 1, T))
-    print("\nexpand_summary preview:\n" + summ.expand_summary(s, result["id"])[:200])
+    print("\nexpand_summary preview:\n" + summ.expand_summary(s, job.summary_id)[:200])
 
     # cleanup
+    s.exec(text("DELETE FROM summary_jobs WHERE thread_id=:t"), params={"t": T})
     s.exec(text("DELETE FROM messages WHERE thread_id=:t"), params={"t": T})
     s.exec(text("DELETE FROM summaries WHERE thread_id=:t"), params={"t": T})
     s.commit()
