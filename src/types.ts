@@ -36,6 +36,37 @@ export interface Exercise {
   personalRecord?: PersonalRecord;
 }
 
+export interface SetPlan {
+  weight: number;
+  reps: number;
+  type: SetType;
+  rir?: number;
+}
+
+export interface ProgressionConfig {
+  version: 1;
+  strategy: 'double_progression' | 'skill';
+  repMin: number;
+  repMax: number;
+  targetRir: number;
+  weightIncrement?: number;
+  requiredSessions: number;
+  goal?: { targetMovement: string; currentVariation: string; targetSets: number; targetReps: number };
+}
+
+export interface ProgressionRecommendation {
+  version: 1;
+  exerciseId: string;
+  exerciseName: string;
+  sourceWorkoutId?: string;
+  sourceDate?: string;
+  status: string;
+  reasoning: string;
+  progression?: ProgressionConfig;
+  next: { sets: SetPlan[] } | null;
+  evidence: { workoutId: string; date: string; actualReps: (number | null)[]; actualRir: (number | null)[]; plannedReps: (number | null)[]; comparable: boolean }[];
+}
+
 export interface WorkoutSet {
   id: string;
   setNumber: number;
@@ -45,6 +76,7 @@ export interface WorkoutSet {
   rpe?: number; // 1-10
   completed: boolean;
   notes?: string;
+  planned?: SetPlan;
 }
 
 export interface WorkoutExercise {
@@ -53,6 +85,8 @@ export interface WorkoutExercise {
   exerciseName: string;
   category: MuscleCategory;
   sets: WorkoutSet[];
+  progression?: ProgressionConfig;
+  nextTarget?: { version: 1; sourceWorkoutId: string; acceptedAt: string; sets: SetPlan[] };
   notes?: string;
 }
 

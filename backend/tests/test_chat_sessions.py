@@ -14,7 +14,7 @@ class ChatSessionTests(unittest.TestCase):
         ChatSession.__table__.create(self.engine)
         Message.__table__.create(self.engine)
 
-    def test_sessions_are_isolated_and_summarized_messages_are_hidden(self):
+    def test_sessions_are_isolated_and_summarized_messages_stay_visible(self):
         with Session(self.engine) as session:
             user = User(uid="user-1", email="test@example.com")
             session.add(user)
@@ -31,7 +31,8 @@ class ChatSessionTests(unittest.TestCase):
             session.add(first_message)
             session.commit()
 
-            self.assertEqual(conversational.read_message_history(session, user.id, first.id), [])
+            self.assertEqual([m.content for m in conversational.read_message_history(session, user.id, first.id)], ["Workout question"])
+            self.assertEqual(conversational.read_recent_messages(session, user.id, first.id), [])
             visible_second = conversational.read_message_history(session, user.id, second.id)
             self.assertEqual([item.content for item in visible_second], ["Nutrition question"])
             self.assertEqual(len(conversational.list_chat_sessions(session, user.id)), 2)

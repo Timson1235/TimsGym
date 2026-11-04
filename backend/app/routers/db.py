@@ -5,7 +5,7 @@ Response shapes match what src/lib/api.ts expects:
   GET  /api/db            -> DatabaseState
   POST/DELETE endpoints   -> { success: true, db: DatabaseState }
 """
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlmodel import Session
 
 from .. import crud
@@ -27,7 +27,10 @@ def save_workout(
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ):
-    crud.save_user_workout(session, user.id, payload)
+    try:
+        crud.save_user_workout(session, user.id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     crud.update_personal_records(session, user.id, payload)  # Epley PRs
     return {"success": True, "db": crud.get_user_database_state(session, user.id)}
 

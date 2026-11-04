@@ -15,6 +15,7 @@ from sqlmodel import Session
 from . import crud
 from .config import settings
 from .db import get_session
+from .models import User
 
 log = logging.getLogger("uvicorn.error")
 _google_request = google_requests.Request()
@@ -43,8 +44,23 @@ def current_user(
         log.warning("AUTH: verify FAILED -> %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=401, detail="Unauthorized: invalid token")
 
-    uid = claims.get("user_id") or claims.get("sub")
+    uid = claims.get("sub")
+    if not isinstance(uid, str) or not uid or claims.get("user_id", uid) != uid:
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid identity")
+    if not settings.APP_ALLOWED_UID or uid != settings.APP_ALLOWED_UID:
+        raise HTTPException(status_code=403, detail="This app is currently restricted to its owner.")
     email = claims.get("email") or f"{uid}@user.com"
     name = claims.get("name")
     log.info("AUTH: verified uid=%s email=%s", uid, email)
     return crud.get_or_create_user(session, uid, email, name)
+
+
+def is_trace_admin(uid: str) -> bool:
+    return bool(settings.APP_ALLOWED_UID and settings.TRACE_ADMIN_UID
+                and uid == settings.APP_ALLOWED_UID and uid == settings.TRACE_ADMIN_UID)
+
+
+def trace_admin(user: User = Depends(current_user)) -> User:
+    if not is_trace_admin(user.uid):
+        raise HTTPException(status_code=403, detail="Trace access is restricted to the administrator.")
+    return user

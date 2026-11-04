@@ -6,6 +6,8 @@ Each handler takes (session, user_id, db_state, args, **kwargs) and returns an
 the current camelCase DatabaseState.
 """
 import time
+import base64
+import json
 from copy import deepcopy
 from typing import Any, Optional
 
@@ -14,6 +16,7 @@ from sqlmodel import Session
 from .. import crud
 from .exercise_identity import ALIASES, normalize_exercise_name, resolve_exercise
 from .workout_builder import build_workout_proposal
+from .progression import recommend_progression
 
 
 # ---- Arithmetic Weight Suggestion (Zero-LLM) ----
@@ -77,22 +80,36 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "start_workout_session",
-        "description": "Show a preview/start button for a complete proposed workout in the same turn as the proposal or revision. Do not wait for a separate chat confirmation. Calling this tool never starts a session: the user explicitly starts it by clicking Workout starten. General training advice without a complete workout does not require this tool. Preserve every proposed exercise, set, rep, weight, set type and note. Calling it again replaces the previous proposal.",
+        "description": "Show a preview/start button for a complete proposed workout in the same turn as the proposal or revision. Do not wait for a separate chat confirmation. Calling this tool never starts a session: the user explicitly starts it by clicking the start button. General training advice without a complete workout does not require this tool. Preserve every proposed exercise, set, rep, weight, set type and note. Calling it again replaces the previous proposal, retaining all later agreed corrections. Existing exercises use canonical identities; missing exercises are persisted by this tool. Clarify ambiguous identities first.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "title": {"type": "STRING", "description": "Title of the workout session, e.g. 'Push A (Brust/Schulter)'"},
+                "title": {"type": "STRING", "description": "Title of the workout session, e.g. 'Full body A'"},
                 "sessionNotes": {"type": "STRING", "description": "Optional warm-up, cooldown, and session-wide guidance"},
                 "exercises": {
                     "type": "ARRAY",
-                    "description": "Every exercise with every set exactly as prescribed in this proposal",
+                    "description": "Every exercise/set exactly as prescribed. Include progression settings for new/revised exercises: rep range, target RIR, normally 2 required sessions, and only a known available increment. Skill goals use strategy=skill with measurable criteria; never automatically change variations.",
                     "items": {
                         "type": "OBJECT",
                         "properties": {
-                            "exerciseName": {"type": "STRING", "description": "Exact exercise name from the library when possible"},
+                            "exerciseName": {"type": "STRING", "description": "Canonical exercise name. Resolve unfamiliar aliases first; ambiguous results require clarification."},
                             "category": {"type": "STRING", "description": "Optional muscle or movement category for a new exercise, e.g. Plyometrics"},
                             "equipment": {"type": "STRING", "description": "Optional equipment, e.g. Bodyweight, Barbell, Dumbbell, Cable, Machine, or Other"},
                             "notes": {"type": "STRING", "description": "Exercise-specific cues, rest time, or safety note"},
+                            "progression": {
+                                "type": "OBJECT", "description": "Structured progression prescription. Specify a rep range and target RIR, and only a known available weight increment. Skill goals use measurable criteria for the current variation.",
+                                "properties": {
+                                    "version": {"type":"INTEGER", "description":"Schema version, always 1"},
+                                    "strategy": {"type":"STRING", "enum":["double_progression","skill"]},
+                                    "repMin": {"type":"INTEGER"}, "repMax": {"type":"INTEGER"},
+                                    "targetRir": {"type":"NUMBER"}, "weightIncrement": {"type":"NUMBER"},
+                                    "requiredSessions": {"type":"INTEGER", "description":"Comparable successful sessions before a weight/variation change; default 2."},
+                                    "goal": {"type":"OBJECT", "properties": {
+                                        "targetMovement":{"type":"STRING"}, "currentVariation":{"type":"STRING"},
+                                        "targetSets":{"type":"INTEGER"}, "targetReps":{"type":"INTEGER"}},
+                                        "required":["targetMovement","currentVariation","targetSets","targetReps"]},
+                                }, "required":["strategy","repMin","repMax","targetRir"],
+                            },
                             "sets": {
                                 "type": "ARRAY",
                                 "description": "Explicit ordered sets. Expand 3x6 into three separate set objects.",
@@ -102,7 +119,7 @@ TOOL_DECLARATIONS = [
                                         "weight": {"type": "NUMBER", "description": "Weight in kg; use 0 for bodyweight"},
                                         "reps": {"type": "INTEGER"},
                                         "setType": {"type": "STRING", "enum": ["warmup", "working", "drop", "failure"]},
-                                        "rir": {"type": "NUMBER", "description": "Optional planned reps in reserve"},
+                                        "rir": {"type": "NUMBER", "description": "Optional PLANNED reps in reserve, not achieved effort"},
                                         "notes": {"type": "STRING"},
                                     },
                                     "required": ["weight", "reps", "setType"],
@@ -118,14 +135,14 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "log_set",
-        "description": "Log a single completed set during an active in-session workout. Record ONLY what the user stated; never guess unstated values.",
+        "description": "Log a single completed set during an active in-session workout. Record ONLY what the user stated; never guess unstated values or effort. Resolve unclear names first. For not_found, discover add_exercise, add once and retry; ambiguous matches require clarification. Loads are per dumbbell/per side where applicable; confirm the unit.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "exercise_name": {"type": "STRING", "description": "Exact name of the exercise"},
                 "weight": {"type": "NUMBER", "description": "Weight in kg (per side for unilateral, per dumbbell for dumbbell)"},
                 "reps": {"type": "INTEGER", "description": "Repetitions completed"},
-                "set_type": {"type": "STRING", "enum": ["working", "warmup", "drop", "failure"], "description": "Type of set ('working' or 'warmup')"},
+                "set_type": {"type": "STRING", "enum": ["working", "warmup", "drop", "failure"], "description": "Explicit set role; clarify if uncertain"},
                 "rir": {"type": "NUMBER", "description": "Reps in Reserve (RIR), if stated by user"},
                 "notes": {"type": "STRING", "description": "Optional notes on feel or technique"},
             },
@@ -134,7 +151,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "correct_log",
-        "description": "Fix an earlier logged entry upon explicit instruction from the user. Overwrites the specified set.",
+        "description": "Fix an earlier logged entry upon explicit instruction from the user. Requires an active workout. Overwrites the specified set only on explicit instruction. Resolve an unclear exercise name first.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -162,19 +179,20 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_session_summary",
-        "description": "Find completed workouts newest first, optionally by title or date. For repeat/adapt requests use limit=1 and include_details=true to retrieve the full reference workout in this call. The latest matching full-body workout can differ from the latest workout overall. Filters match titles/dates, not semantic workout content; if unmatched inspect recent sessions and ask if unclear.",
+        "description": "Find completed workouts newest first, optionally by title/date. Default lightweight summaries contain IDs, dates, titles, duration, exercise names/IDs and short notes, never sets or weights. Browse candidates, then use get_workout_details for the selected ID. For an already-specific reference or a request for weights/reps use include_details=true (limit=1 for last): full records appear in workout, without duplicated set summaries. Follow nextCursor while hasMore=true, keeping the same filter; a page is not the whole history. Filters match titles/dates, not exercise content; inspect unfiltered summaries if a category title is unmatched. Truncated summary notes are marked; full notes remain in workout details.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "limit": {"type": "INTEGER", "description": "Number of past workouts to retrieve (default 3)"},
                 "search_title_or_date": {"type": "STRING", "description": "Optional title or date filter (YYYY-MM-DD). Full body / Ganzkörper title aliases are supported."},
                 "include_details": {"type": "BOOLEAN", "description": "Return complete structured workouts including set types, effort and notes (default false). Use true when repeating/adapting a session."},
+                "cursor": {"type": "STRING", "description": "Opaque nextCursor from the previous page; keep the same search_title_or_date. Omit for the first page. Invalid/stale cursors require restarting, never guessing."},
             },
         },
     },
     {
         "name": "get_workout_details",
-        "description": "Retrieve one exact saved workout by ID returned from a session/history lookup. Returns all recorded exercises, sets, types, effort and notes, including completion status. Use when a specific session is referenced; never invent an ID.",
+        "description": "Retrieve one exact saved workout by ID returned from a session/history lookup. Returns all recorded exercises, sets, types, effort and notes, including completion status. Use when a specific session is referenced; never invent an ID. Avoid a duplicate lookup if include_details already returned the full workout.",
         "parameters": {
             "type": "OBJECT",
             "properties": {"workout_id": {"type": "STRING", "description": "Exact saved workout ID."}},
@@ -183,11 +201,11 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "resolve_exercise",
-        "description": "Resolve any colloquial exercise wording to the permanent canonical library name and ID before logging. Understands German/English aliases such as Kniebeuge/Barbell Back Squat and RDL/Romanian Deadlift.",
+        "description": "Resolve any colloquial exercise wording to the permanent canonical library name and ID before logging. Returns resolved, ambiguous or not_found. Use the canonical name; ask on ambiguity. On not_found, discover add_exercise, add once and retry the intended action.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "query": {"type": "STRING", "description": "Colloquial or partial exercise name, e.g. 'Bank', 'Schrägbank'"},
+                "query": {"type": "STRING", "description": "Colloquial, translated or partial exercise name"},
             },
             "required": ["query"],
         },
@@ -218,16 +236,11 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "suggest_weight",
-        "description": "Calculate progressive overload recommendation for a weight based on last weight and last RIR using deterministic arithmetic.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "last_weight": {"type": "NUMBER", "description": "Last logged weight in kg"},
-                "last_rir": {"type": "NUMBER", "description": "Last logged RIR (Reps in Reserve)"},
-                "is_main_lift": {"type": "BOOLEAN", "description": "Whether this is a primary compound lift (default True)"},
-            },
-            "required": ["last_weight"],
-        },
+        "description": "Retrieve a compact deterministic progression recommendation from actual completed sets versus preserved plan values. Searches up to three comparable sessions for the canonical exercise. Returns evidence, reason and proposed next targets; never changes a plan. Use instead of inventing percentages from one set. Missing plans, effort or equipment increments are explicitly reported.",
+        "parameters": {"type":"OBJECT", "properties": {
+            "exercise_id":{"type":"STRING", "description":"Permanent exercise ID, preferred."},
+            "exercise_name":{"type":"STRING", "description":"Canonical name or unambiguous alias if ID unknown."},
+        }},
     },
     {
         "name": "log_workout",
@@ -371,6 +384,9 @@ def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwarg
         # Look for the first uncompleted set or append new
         pending = next((s for s in we.get("sets", []) if not s.get("completed")), None)
         if pending:
+            # Preserve an existing prescription; never reconstruct it after logging.
+            if not pending.get("planned") and pending.get("reps", 0) > 0:
+                pending["planned"] = {"weight": pending.get("weight", 0), "reps": pending.get("reps", 0), "type": pending.get("type", "working")}
             pending["weight"] = weight
             pending["reps"] = reps
             pending["type"] = set_type
@@ -453,7 +469,11 @@ def _completed_workouts(db: dict) -> list[dict]:
 
 
 def _recorded_sets(exercise: dict) -> list[dict]:
-    return [deepcopy(s) for s in exercise.get("sets", []) if s.get("completed")]
+    # History is an outcome projection. Full prescriptions remain available via
+    # get_workout_details; progression uses its own bounded evidence projection.
+    return [{**{key: deepcopy(s[key]) for key in ("id", "setNumber", "type", "weight", "reps", "rpe", "completed") if key in s},
+             **({"notes": str(s["notes"])[:300]} if s.get("notes") else {})}
+            for s in exercise.get("sets", []) if s.get("completed")][:20]
 
 
 def handle_get_exercise_history(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
@@ -512,30 +532,57 @@ def _matches_workout_title_or_date(workout: dict, query: str) -> bool:
     return normalized in title or query in (workout.get("date") or "")
 
 
+def _session_cursor(workout: dict, query: str) -> str:
+    value = {'v': 1, 'id': workout['id'], 'date': workout.get('date'), 'filter': query}
+    return base64.urlsafe_b64encode(json.dumps(value, separators=(',', ':')).encode()).decode()
+
+
+def _read_session_cursor(cursor, query, workouts):
+    try:
+        if not isinstance(cursor, str) or len(cursor) > 2048:
+            raise ValueError('Invalid cursor')
+        value = json.loads(base64.b64decode(cursor.encode(), altchars=b'-_', validate=True))
+        if (not isinstance(value, dict) or set(value) != {'v', 'id', 'date', 'filter'}
+                or value['v'] != 1 or value['filter'] != query):
+            raise ValueError('Cursor filter/version mismatch')
+        # Resolve only against this account's filtered snapshot. A cursor never
+        # authorizes a global workout lookup. Newer insertions do not shift it.
+        for index, workout in enumerate(workouts):
+            if workout['id'] == value['id'] and workout.get('date') == value['date']:
+                return index + 1
+    except (ValueError, TypeError, UnicodeError, KeyError):
+        pass
+    raise ValueError('Invalid or stale session cursor; restart without cursor using the intended filter.')
+
+
 def handle_get_session_summary(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
     query = (args.get("search_title_or_date") or "").strip().lower()
+    workouts = [workout for workout in _completed_workouts(db)
+                if not query or _matches_workout_title_or_date(workout, query)]
+    offset = _read_session_cursor(args['cursor'], query, workouts) if 'cursor' in args else 0
+    limit = _history_limit(args, 3)
+    page = workouts[offset:offset + limit]
+    detailed = bool(args.get('include_details'))
     summaries = []
-    for workout in _completed_workouts(db):
-        if query and not _matches_workout_title_or_date(workout, query):
-            continue
-        summary = {
-            "id": workout["id"], "date": workout.get("date"), "title": workout.get("title"),
-            "totalVolume": workout.get("totalVolume"), "notes": workout.get("notes"),
-            "exercises": [{"exerciseId": exercise.get("exerciseId"),
-                           "exerciseName": exercise.get("exerciseName"),
-                           "completedSets": len(_recorded_sets(exercise)),
-                           "sets": [{k: value for k, value in recorded.items()
-                                     if k in ("weight", "reps", "type", "rpe")}
-                                    for recorded in _recorded_sets(exercise)]}
-                          for exercise in workout.get("exercises", [])],
-        }
-        if args.get("include_details"):
-            summary["workout"] = deepcopy(workout)
+    for workout in page:
+        summary = {'id': workout['id'], 'date': workout.get('date'), 'title': workout.get('title'),
+                   'durationMinutes': workout.get('durationMinutes')}
+        if detailed:
+            summary['workout'] = deepcopy(workout)
+        else:
+            notes = workout.get('notes') or ''
+            summary.update(
+                exercises=[{'exerciseId': exercise.get('exerciseId'), 'exerciseName': exercise.get('exerciseName')}
+                           for exercise in workout.get('exercises', [])],
+                notes=notes[:300] or None, notesTruncated=len(notes) > 300)
         summaries.append(summary)
-        if len(summaries) >= _history_limit(args, 3):
-            break
-    return {"sessions": summaries, "order": "newest_first", "filter": query or None,
-            "message": None if summaries else "No matching completed workout. Inspect unfiltered recent sessions; do not assume the latest session was full-body."}
+    has_more = offset + len(page) < len(workouts)
+    return {'sessions': summaries, 'order': 'newest_first', 'filter': query or None,
+            'projection': 'detailed' if detailed else 'summary',
+            'returned': len(page), 'effectiveLimit': limit,
+            'hasMore': has_more, 'nextCursor': _session_cursor(page[-1], query) if has_more else None,
+            'coverage': 'Completed workouts matching the title/date filter in the current account snapshot; not semantic category search.',
+            'message': None if summaries else 'No matching completed workout on this page. Category filters match titles only; inspect unfiltered summaries before concluding no relevant workout exists.'}
 
 
 def handle_get_workout_details(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
@@ -583,13 +630,7 @@ def handle_resolve_flag(session: Session, user_id: int, db: dict, args: dict, **
 
 
 def handle_suggest_weight(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
-    last_w = float(args.get("last_weight", 0))
-    last_rir = args.get("last_rir")
-    if last_rir is not None:
-        last_rir = float(last_rir)
-    is_main = bool(args.get("is_main_lift", True))
-    weight, reason = calculate_suggested_weight(last_w, last_rir, is_main)
-    return {"suggested_weight": weight, "reasoning": reason}
+    return recommend_progression(db, exercise_id=args.get("exercise_id"), exercise_name=args.get("exercise_name", ""))
 
 
 def handle_save_personal_memory(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:

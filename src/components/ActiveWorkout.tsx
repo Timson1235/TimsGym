@@ -1,3 +1,5 @@
+import { ProgressionSettings } from './ProgressionSettings';
+import { setPlan, updateOutcome, applyTargets } from '../lib/trainingTargets';
 import { Dialog } from './Dialog';
 import React, { useState, useEffect } from 'react';
 import { 
@@ -5,7 +7,7 @@ import {
   RotateCcw, Trophy, Dumbbell, Zap, Flame, Info, CheckCircle2, ArrowRight
 } from 'lucide-react';
 import { 
-  WorkoutSession, WorkoutExercise, WorkoutSet, Exercise, SetType, DatabaseState 
+  WorkoutSession, WorkoutExercise, WorkoutSet, Exercise, SetType, DatabaseState, ProgressionRecommendation, ProgressionConfig
 } from '../types';
 import { 
   getLastPerformanceForExercise, calculateOneRepMax, calculateWorkoutVolume, PreviousPerformance 
@@ -42,7 +44,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   
   // AI Suggestion State
   const [loadingAiExerciseId, setLoadingAiExerciseId] = useState<string | null>(null);
-  const [aiSuggestions, setAiSuggestions] = useState<Record<string, string>>({});
+  const [aiSuggestions, setAiSuggestions] = useState<Record<string, ProgressionRecommendation>>({});
+  const [suggestionError, setSuggestionError] = useState('');
 
   // Derive duration from the persisted start time, including after tab switches.
   useEffect(() => {
@@ -88,9 +91,9 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         id: `set_${Date.now()}_${i}`,
         setNumber: i,
         type: 'working',
-        weight: prevSet ? prevSet.weight : (exercise.personalRecord?.maxWeight || 100),
+        weight: prevSet ? prevSet.weight : 0,
         reps: prevSet ? prevSet.reps : 8,
-        rpe: prevSet?.rpe || 8,
+        rpe: undefined,
         completed: false,
       });
     }
@@ -100,7 +103,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       exerciseId: exercise.id,
       exerciseName: exercise.name,
       category: exercise.category,
-      sets: defaultSets,
+      sets: defaultSets.map((set) => ({ ...set, planned: setPlan(set) })),
     };
 
     onUpdateWorkout({
@@ -127,12 +130,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
         id: `set_${Date.now()}`,
         setNumber: we.sets.length + 1,
         type: lastSet ? lastSet.type : 'working',
-        weight: lastSet ? lastSet.weight : 100,
+        weight: lastSet ? lastSet.weight : 0,
         reps: lastSet ? lastSet.reps : 8,
-        rpe: lastSet?.rpe || 8,
+        rpe: undefined,
         completed: false,
       };
-      return { ...we, sets: [...we.sets, newSet] };
+      return { ...we, sets: [...we.sets, { ...newSet, planned: setPlan(newSet, we.progression?.targetRir) }] };
     });
 
     onUpdateWorkout({ ...activeWorkout, exercises: updatedExercises });
@@ -155,7 +158,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       const updatedSets = we.sets.map((s) => {
         if (s.id !== setId) return s;
 
-        const updatedSet = { ...s, [field]: value };
+        const updatedSet = updateOutcome(s, field, value);
 
         if (field === 'completed' && value === true) {
           onStartRestTimer(90);
@@ -188,49 +191,34 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       type: 'working',
       weight: ps.weight,
       reps: ps.reps,
-      rpe: ps.rpe || 8,
+      rpe: undefined,
       completed: false,
     }));
 
     const updatedExercises = activeWorkout.exercises.map((item) =>
-      item.id === we.id ? { ...item, sets: newSets } : item
+      item.id === we.id ? { ...item, sets: newSets.map((set) => ({ ...set, planned: setPlan(set, we.progression?.targetRir) })) } : item
     );
 
     onUpdateWorkout({ ...activeWorkout, exercises: updatedExercises });
   };
 
   const handleGetAISuggestion = async (we: WorkoutExercise) => {
+    setSuggestionError('');
     setLoadingAiExerciseId(we.id);
-    const target = we.sets.find((set) => !set.completed && set.type === 'working');
-    const suggestion = await fetchAISuggestedWeight(we.exerciseName, target?.reps ?? 8, target?.rpe ?? 8);
-    if (suggestion && suggestion.suggestedWeight == null) {
-      setAiSuggestions((prev) => ({ ...prev, [we.id]: suggestion.reasoning }));
-    }
+    const suggestion = await fetchAISuggestedWeight(we.exerciseName, 8, 8, we.exerciseId, we.progression);
     setLoadingAiExerciseId(null);
+    if (suggestion) setAiSuggestions((previous) => ({ ...previous, [we.id]: suggestion }));
+    else setSuggestionError('Ziel konnte nicht geprüft werden. Bitte Anmeldung und Verbindung prüfen und erneut versuchen.');
+  };
 
-    if (suggestion && suggestion.suggestedWeight != null) {
-      setAiSuggestions((prev) => ({
-        ...prev,
-        [we.id]: `AI Target: ${suggestion.suggestedWeight} ${unit} × ${suggestion.suggestedReps} reps — ${suggestion.reasoning}`,
-      }));
-
-      const updatedExercises = activeWorkout.exercises.map((item) => {
-        if (item.id !== we.id) return item;
-        const updatedSets = item.sets.map((s) => {
-          if (!s.completed && s.type === 'working') {
-            return {
-              ...s,
-              weight: suggestion.suggestedWeight ?? s.weight,
-              reps: suggestion.suggestedReps || s.reps,
-            };
-          }
-          return s;
-        });
-        return { ...item, sets: updatedSets };
-      });
-
-      onUpdateWorkout({ ...activeWorkout, exercises: updatedExercises });
-    }
+  const configureProgression = (we: WorkoutExercise, progression: ProgressionConfig) => {
+    if (we.sets.some((set) => set.completed)) return;
+    onUpdateWorkout({ ...activeWorkout, exercises: activeWorkout.exercises.map((exercise) => exercise.id === we.id
+      ? { ...exercise, progression, sets: exercise.sets.map((set) => {
+        const reps = set.type === 'working' ? Math.max(progression.repMin, Math.min(progression.repMax, set.reps)) : set.reps;
+        return { ...set, reps, rpe: undefined, planned: setPlan({ ...set, reps }, set.type === 'working' ? progression.targetRir : undefined) };
+      }) } : exercise) });
+    setAiSuggestions((previous) => { const next = { ...previous }; delete next[we.id]; return next; });
   };
 
   const handleFinish = () => {
@@ -341,7 +329,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                     className="flex min-h-9 items-center gap-1.5 rounded-lg bg-brand-50 px-3 text-sm font-medium text-brand-800 hover:bg-brand-100 disabled:opacity-50"
                   >
                     <Sparkles className="h-3.5 w-3.5 text-brand-600" />
-                    <span>{loadingAiExerciseId === we.id ? 'Analyzing...' : 'AI Target'}</span>
+                    <span>{loadingAiExerciseId === we.id ? 'Vergleiche…' : 'Nächstes Ziel prüfen'}</span>
                   </button>
 
                   {lastPerf && (
@@ -386,9 +374,19 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
               {aiSuggestions[we.id] && (
                 <div className="bg-brand-50 border border-brand-200 rounded-lg p-3 text-xs text-brand-900 flex items-center gap-2 font-medium">
                   <Sparkles className="h-4 w-4 text-brand-600 shrink-0" />
-                  <span>{aiSuggestions[we.id]}</span>
+                  <div>
+                    <p>{aiSuggestions[we.id].reasoning}</p>
+                    {aiSuggestions[we.id].next && <button className="mt-2 rounded border border-brand-300 px-2 py-1" onClick={() => {
+                      onUpdateWorkout({ ...activeWorkout, exercises: activeWorkout.exercises.map((exercise) => exercise.id === we.id
+                        ? applyTargets(exercise, aiSuggestions[we.id].next!.sets) : exercise) });
+                      setAiSuggestions((previous) => { const next = { ...previous }; delete next[we.id]; return next; });
+                    }}>Ziel für offene Arbeitssätze übernehmen</button>}
+                  </div>
                 </div>
               )}
+
+              <ProgressionSettings exercise={we} onChange={(config) => configureProgression(we, config)} />
+              {suggestionError && <p role="alert" className="text-sm text-rose-700">{suggestionError}</p>}
 
               {/* Focused set editor: each completed set remains visible, but every value is thumb-sized. */}
               <div className="space-y-2">
@@ -418,6 +416,10 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                         </select>
                       </label>
 
+                      <div>
+                      {set.planned && <p className="mb-1 text-xs text-slate-500">
+                        Plan: {set.planned.weight} {unit} × {set.planned.reps}{set.planned.rir != null ? ` · RIR ${set.planned.rir}` : ''}
+                      </p>}
                       <div className="grid grid-cols-3 gap-2">
                         <label>
                           <span className="app-eyebrow mb-1 block">{unit}</span>
@@ -440,20 +442,21 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                           />
                         </label>
                         <label>
-                          <span className="app-eyebrow mb-1 block">RPE</span>
+                          <span className="app-eyebrow mb-1 block">RIR (Ist)</span>
                           <input
                             type="number"
                             step="0.5"
                             max="10"
-                            min="1"
-                            value={set.rpe || ''}
-                            onChange={(e) => handleUpdateSet(we.id, set.id, 'rpe', parseFloat(e.target.value) || undefined)}
-                            placeholder="8"
+                            min="0"
+                            value={set.rpe == null ? '' : 10 - set.rpe}
+                            onChange={(e) => handleUpdateSet(we.id, set.id, 'rpe', e.target.value === '' ? undefined : 10 - Number(e.target.value))}
+                            placeholder="?"
                             className="h-12 w-full rounded-lg border border-slate-200 bg-white px-2 text-center font-mono text-base text-slate-700"
                           />
                         </label>
                       </div>
 
+                      </div>
                       <div className="flex items-end justify-end gap-1">
                         <button
                           onClick={() => handleUpdateSet(we.id, set.id, 'completed', !set.completed)}

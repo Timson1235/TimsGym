@@ -57,7 +57,8 @@ class TrainingRetrievalTests(unittest.TestCase):
         self.assertEqual(recent['sessions'][0]['id'], 'last')
         dated = handle_get_session_summary(None, 1, self.db, {'search_title_or_date': '2026-10-01'})
         self.assertEqual(dated['sessions'][0]['id'], 'old')
-        self.assertEqual(recent['sessions'][0]['exercises'][0]['sets'][1]['weight'], 40)
+        self.assertEqual(recent['sessions'][0]['exercises'][0]['exerciseName'], 'Barbell Overhead Press')
+        self.assertNotIn('sets', recent['sessions'][0]['exercises'][0])
 
     def test_aliases_resolve_and_ambiguous_names_do_not_pick_first_match(self):
         resolved = handle_get_exercise_history(None, 1, self.db, {'exercise_name': 'Kniebeuge'})
@@ -115,3 +116,73 @@ class TrainingRetrievalTests(unittest.TestCase):
                 self.assertEqual(handle_get_workout_details(session, 1, snapshot, {'workout_id': 'foreign'})['status'], 'not_found')
         finally:
             engine.dispose()
+
+    def test_lightweight_projection_omits_training_values_and_marks_short_notes(self):
+        self.db['workouts'][3]['notes'] = 'n' * 500
+        original = deepcopy(self.db)
+        result = handle_get_session_summary(None, 1, self.db, {'limit': 1})
+        item = result['sessions'][0]
+        self.assertEqual(result['projection'], 'summary')
+        self.assertEqual(item['durationMinutes'], 45)
+        self.assertEqual(item['exercises'], [{'exerciseId': 'press', 'exerciseName': 'Barbell Overhead Press'}])
+        self.assertTrue(item['notesTruncated'])
+        self.assertEqual(len(item['notes']), 300)
+        for field in ('sets', 'weight', 'reps', 'rpe', 'rir', 'planned', 'totalVolume'):
+            self.assertNotIn(f'"{field}"', __import__('json').dumps(item))
+        detailed = handle_get_session_summary(None, 1, self.db, {'limit': 1, 'include_details': True})
+        self.assertEqual(detailed['sessions'][0]['workout'], self.db['workouts'][3])
+        self.assertNotIn('exercises', detailed['sessions'][0])
+        self.assertEqual(self.db, original)
+
+    def test_cursor_pages_beyond_ten_with_same_day_ties_and_no_duplicates(self):
+        for i in range(24):
+            self.db['workouts'].append(workout(f'extra-{i}', '2026-10-19', 'Full body', 'squat'))
+        args, seen = {'limit': 5}, []
+        while True:
+            result = handle_get_session_summary(None, 1, self.db, args)
+            self.assertEqual(result['returned'], len(result['sessions']))
+            self.assertEqual(result['effectiveLimit'], 5)
+            seen.extend(item['id'] for item in result['sessions'])
+            if not result['hasMore']:
+                self.assertIsNone(result['nextCursor'])
+                break
+            self.assertTrue(result['nextCursor'])
+            args['cursor'] = result['nextCursor']
+        self.assertEqual(len(seen), 27)
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertNotIn('draft', seen)
+
+    def test_cursor_is_scoped_to_filter_and_account_and_rejects_stale_anchor(self):
+        import base64
+        import json
+        args = {'limit': 1, 'search_title_or_date': 'full body'}
+        first = handle_get_session_summary(None, 1, self.db, args)
+        cursor = first['nextCursor']
+        second = handle_get_session_summary(None, 1, self.db, {**args, 'cursor': cursor})
+        self.assertEqual(second['sessions'][0]['id'], 'old')
+        self.assertFalse(second['hasMore'])
+        with self.assertRaisesRegex(ValueError, 'cursor'):
+            handle_get_session_summary(None, 1, self.db, {'cursor': cursor})
+        with self.assertRaisesRegex(ValueError, 'cursor'):
+            handle_get_session_summary(None, 2, {'workouts': []}, {**args, 'cursor': cursor})
+        payload = json.loads(base64.urlsafe_b64decode(cursor))
+        payload['id'] = 'foreign-id'
+        forged = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        for value in ['not-a-cursor', forged, '', 'x' * 3000]:
+            with self.assertRaisesRegex(ValueError, 'cursor'):
+                handle_get_session_summary(None, 1, self.db, {**args, 'cursor': value})
+        self.db['workouts'] = [w for w in self.db['workouts'] if w['id'] != 'base']
+        with self.assertRaisesRegex(ValueError, 'cursor'):
+            handle_get_session_summary(None, 1, self.db, {**args, 'cursor': cursor})
+
+    def test_newer_insert_does_not_shift_cursor_page_and_empty_search_is_explicit(self):
+        first = handle_get_session_summary(None, 1, self.db, {'limit': 1})
+        self.db['workouts'].append(workout('new', '2026-10-24', 'New', 'squat'))
+        second = handle_get_session_summary(None, 1, self.db, {'limit': 1, 'cursor': first['nextCursor'], 'include_details': True})
+        self.assertEqual(second['sessions'][0]['id'], 'base')
+        self.assertEqual(second['projection'], 'detailed')
+        empty = handle_get_session_summary(None, 1, self.db, {'search_title_or_date': 'missing-title'})
+        self.assertEqual(empty['returned'], 0)
+        self.assertFalse(empty['hasMore'])
+        self.assertIsNone(empty['nextCursor'])
+        self.assertIn('titles only', empty['message'])

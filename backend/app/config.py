@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     SQL_PASSWORD: str = ""
     SQL_DB_NAME: str = ""
     FIREBASE_PROJECT_ID: str = "fitki-505410"
+    # Private beta: Firebase UID is a stable identifier, not a credential.
+    APP_ALLOWED_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
+    TRACE_ADMIN_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
     CLAUDE_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-sonnet-5-5"
     CLAUDE_PROMPT_CACHING: bool = True
@@ -21,9 +24,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.7-flash"
     GEMINI_LAST_RESORT_MODEL: str = "gemini-2.5-flash"
-    # Prints the full model payload (system prompt, messages, tools) to stdout.
-    # Contains personal training data, so keep it off outside of debugging.
+    # Legacy compatibility flag. Payloads are now stored in private traces,
+    # never printed to the console.
     AI_DEBUG_PROMPTS: bool = False
+    SUMMARY_WORKER_ENABLED: bool = True
+    SUMMARY_TIMEOUT_SECONDS: float = 45.0
 
     @property
     def database_url(self) -> str:

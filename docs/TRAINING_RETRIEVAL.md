@@ -3,9 +3,9 @@
 ## Current request path
 
 1. Authenticate the user, then load their profile, exercise library, and saved workouts from Postgres (`crud.get_user_database_state`). Workouts are ordered by training date, creation time, then ID, newest first.
-2. Build a compact system context: profile, explicitly saved preferences, open flags, active-session progress, and recent performance for selected main lifts. The entire workout history is **not** put into the model prompt.
-3. Add up to 20 recent uncompressed chat messages and the three newest text summaries for this chat. Token-budget estimation triggers optional compaction of older messages; the original rows remain stored.
-4. The model chooses tools. History tools filter the account-scoped snapshot in Python; they do not call an embedding model, another LLM, or the database for each lookup. Tool outcomes are returned to the model and recorded in tool logs. The loop allows four model rounds.
+2. Build a compact system context (`backend/app/agent/prompts.py`): profile, explicitly saved preferences, open flags, the conversation summary and the complete active workout when present. No workout history or main-lift performance is injected; the model retrieves it through tools.
+3. Add the latest rolling summary checkpoint and the pending message tail for this chat (see [Background summaries](BACKGROUND_SUMMARIES.md)). Compaction runs in a background worker, never during the request; the original rows remain stored.
+4. The model chooses tools. History tools filter the account-scoped snapshot in Python; they do not call an embedding model, another LLM, or the database for each lookup. Tool outcomes are returned to the model and recorded in tool logs. Tools are activated through native discovery, and the loop allows up to nine model requests (see [Coach prompts](COACH_PROMPTS.md)).
 5. Persist the chat response and refresh the database state. Browser chat caching only accelerates display; it is not the agent's training-data source.
 
 ## Tools
@@ -31,6 +31,6 @@ The retrieval sequence is instructed by the system prompt. It is **not** enforce
 
 Current strengths: no embedding latency for exact training facts, small bounded tool results, compact context, and no redundant detail lookup when the session search returns full details.
 
-Current limits: every chat still loads the user's full training history into the server snapshot, twice across the request path; history tools scan/sort that snapshot. Summary retrieval is chronological, not semantic. Four model rounds may limit complicated workflows. There is no implemented fitness-book RAG or research-search layer.
+Current limits: every chat still loads the user's full training history into the server snapshot, twice across the request path; history tools scan/sort that snapshot. Summary retrieval is chronological, not semantic. There is no implemented fitness-book RAG or research-search layer.
 
 Next scaling step: indexed, account-scoped SQL queries for bounded recent sessions and exact exercise IDs, rather than loading all history. Keep exact numeric facts in structured records. Add hybrid keyword/vector retrieval and source metadata separately for books, research, and semantic notes. Measure context size, retrieval accuracy and model/tool latency before introducing extra model calls or rerankers.

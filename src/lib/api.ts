@@ -1,4 +1,4 @@
-import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
+import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile, ProgressionConfig, ProgressionRecommendation } from '../types';
 import { auth } from './firebase';
 import { readChatStream, type ChatStreamEvent } from './chatStream';
 import { cacheChatHistory, removeCachedChat, readChatCache } from './chatCache';
@@ -285,13 +285,13 @@ export async function fetchAIUsageSummary() {
   return await res.json();
 }
 
-export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8) {
+export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8, exerciseId?: string, progression?: ProgressionConfig): Promise<ProgressionRecommendation | null> {
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/suggest-weight', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ exerciseName, targetReps, targetRpe }),
+      body: JSON.stringify({ exerciseName, targetReps, targetRpe, exerciseId, progression }),
     });
     if (!res.ok) throw new Error('AI Weight Suggestion failed');
     return await res.json();
@@ -299,4 +299,27 @@ export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 
     console.error('AI Weight Suggestion Error:', error);
     return null;
   }
+}
+
+export async function fetchWorkoutReview(workoutId: string): Promise<{ recommendations: ProgressionRecommendation[] }> {
+  if (!auth.currentUser) throw new Error('Bitte anmelden, um die gespeicherte Trainingshistorie auszuwerten.');
+  const res = await fetch(`/api/ai/workout-review/${encodeURIComponent(workoutId)}`, { headers: await getAuthHeaders() });
+  if (!res.ok) throw new Error('Trainingsauswertung konnte nicht geladen werden.');
+  return res.json();
+}
+
+export async function fetchExecutionTrace(path = '') {
+  const response = await fetch(`/api/ai/traces${path}`, { headers: await getAuthHeaders(), cache: 'no-store' });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Please sign in to inspect your traces.' : 'Could not load execution traces.');
+  return response.json();
+}
+
+export async function fetchAppAccess(): Promise<{canUseApp: boolean; canInspectTraces: boolean}> {
+  const response = await fetch('/api/access', {headers: await getAuthHeaders(), cache: 'no-store'});
+  if (!response.ok) {
+    throw new Error(response.status === 403
+      ? 'This app is currently private. This account does not have access.'
+      : 'Could not verify access. Please retry or sign in again.');
+  }
+  return response.json();
 }

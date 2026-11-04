@@ -1,6 +1,7 @@
 import time
 
 from .exercise_identity import resolve_exercise
+from .progression import ProgressionConfig, SetPlan
 
 
 def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -> dict:
@@ -29,7 +30,9 @@ def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -
                 "type": planned_set.get("setType", "working"),
                 "weight": float(planned_set["weight"]),
                 "reps": int(planned_set["reps"]),
-                "rpe": round(10.0 - float(rir), 1) if rir is not None else None,
+                "rpe": None,
+                "planned": SetPlan(weight=float(planned_set["weight"]), reps=int(planned_set["reps"]),
+                                   type=planned_set.get("setType", "working"), rir=rir).model_dump(exclude_none=True),
                 "completed": False,
                 "notes": planned_set.get("notes"),
             })
@@ -41,6 +44,8 @@ def build_workout_proposal(db: dict, args: dict, timestamp: int | None = None) -
             "category": match["category"],
             "sets": workout_sets,
             "notes": planned.get("notes"),
+            **({"progression": ProgressionConfig.model_validate(planned["progression"]).model_dump(exclude_none=True)}
+               if planned.get("progression") else {}),
         })
 
     return {

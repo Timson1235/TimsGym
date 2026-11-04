@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.agent.claude_provider import run_claude_agent
 from app.agent.tools import TOOL_DECLARATIONS
@@ -21,6 +21,27 @@ class FakeResponse:
 
 
 class ClaudeProviderTests(unittest.TestCase):
+    def test_unusable_responses_fail_before_tools_run_in_both_transports(self):
+        for transport in ('_request_json', '_request_stream'):
+            for response in (
+                {'content': [], 'stop_reason': 'tool_use'},
+                {'content': [], 'stop_reason': 'end_turn'},
+                {'content': [{'type': 'text', 'text': '  '}], 'stop_reason': 'end_turn'},
+                {'content': [{'type': 'text', 'text': 'Checking'}], 'stop_reason': 'tool_use'},
+            ):
+                with self.subTest(transport=transport, response=response):
+                    handler = Mock()
+                    steps = []
+                    with patch(f'app.agent.claude_provider.{transport}', return_value=response) as request:
+                        with self.assertRaisesRegex(RuntimeError, 'no usable response'):
+                            run_claude_agent(api_key='test', model='test', system_instruction='test',
+                                messages=[], tools=[], handle_tool=handler, on_trace_step=steps.append,
+                                on_event=Mock() if transport == '_request_stream' else None)
+                    handler.assert_not_called()
+                    request.assert_called_once()
+                    self.assertEqual(steps[0]['status'], 'error')
+                    self.assertEqual(steps[0]['errorType'], 'RuntimeError')
+
     def test_full_coach_toolset_stays_within_strict_optional_budget(self):
         with patch("app.agent.claude_provider._request_json", return_value={
             "content": [{"type": "text", "text": "OK"}],
