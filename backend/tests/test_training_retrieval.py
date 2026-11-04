@@ -7,6 +7,7 @@ from app import crud
 from app.models import Workout
 from app.agent.tools import (
     handle_get_exercise_history, handle_get_session_summary, handle_get_workout_details,
+    handle_suggest_weight,
 )
 
 LIBRARY = [
@@ -51,6 +52,27 @@ class TrainingRetrievalTests(unittest.TestCase):
         self.assertEqual(history['history'][0]['workoutId'], 'last')
         self.assertEqual(len(history['history'][0]['sets']), 2)
         self.assertEqual(history['history'][0]['sets'][1]['rpe'], 8)
+
+    def test_progression_includes_actual_baseline_even_without_setup(self):
+        before = deepcopy(self.db)
+        result = handle_suggest_weight(None, 1, self.db, {'exercise_id': 'press'})
+        self.assertEqual(result['status'], 'needs_setup')
+        self.assertIsNone(result['next'])
+        history = result['lastPerformance']['history']
+        self.assertEqual(history[0]['workoutId'], 'last')
+        self.assertEqual(len(history[0]['sets']), 2)  # Excludes unfinished set and draft workout.
+        self.assertEqual(history[0]['sets'][0]['type'], 'warmup')
+        self.assertNotIn('rpe', history[0]['sets'][0])
+        self.assertEqual(history[0]['sets'][1]['weight'], 40)
+        self.assertEqual(history[0]['sets'][1]['rpe'], 8)
+        self.assertEqual(before, self.db)
+
+    def test_progression_baseline_never_guesses_unknown_or_ambiguous_exercises(self):
+        for args, status in [({'exercise_id': 'foreign-id'}, 'not_found'),
+                             ({'exercise_name': 'Overhead Press'}, 'ambiguous')]:
+            result = handle_suggest_weight(None, 1, self.db, args)
+            self.assertEqual(result['lastPerformance']['status'], status)
+            self.assertEqual(result['lastPerformance']['history'], [])
 
     def test_latest_overall_and_date_filter(self):
         recent = handle_get_session_summary(None, 1, self.db, {'limit': 1})

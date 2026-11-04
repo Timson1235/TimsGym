@@ -249,6 +249,11 @@ def run_claude_agent(
         }
         if finalizing:
             payload['tool_choice'] = {'type': 'none'}
+            if selection:
+                # No tools can run in this round, so their schemas serve no purpose.
+                payload.pop('tools')
+                payload.pop('tool_choice')
+                offered = set()
         if on_event:
             payload["stream"] = True
             on_event({"type": "reset"})
@@ -325,6 +330,8 @@ def run_claude_agent(
         trace_step['finalResponseOnly'] = finalizing
         trace_step['contextSelection'] = bool(selection)
         trace_step['contextCharacters'] = len(json.dumps(payload['messages']))
+        if selection:
+            trace_step['contextBudget'] = dict(selection.stats)
         trace_step["stopReason"] = result.get("stop_reason")
         trace_step["toolCalls"] = [call.get("name", "") for call in tool_calls]
         if not tool_calls:

@@ -293,7 +293,10 @@ class ProviderDiscoveryTests(unittest.TestCase):
                 self.assertEqual(result['trace']['terminationReason'], 'round_limit')
                 self.assertEqual(result['actionsExecuted'], [])
                 if provider == 'claude':
-                    self.assertEqual(payloads[-1]['tool_choice'], {'type': 'none'})
+                    if coach.settings.CLAUDE_CONTEXT_SELECTION:
+                        self.assertNotIn('tools', payloads[-1])
+                    else:
+                        self.assertEqual(payloads[-1]['tool_choice'], {'type': 'none'})
                 else:
                     self.assertEqual(payloads[-1]['toolConfig']['function_calling_config']['mode'], 'NONE')
 

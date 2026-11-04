@@ -20,7 +20,7 @@ class ContextSelectionTests(unittest.TestCase):
                 'content': 'exact sets ' * 3000}]}]
 
     def test_compaction_and_restore_preserve_archive_and_exchange_ids(self):
-        manager = ContextSelection(self.messages)
+        manager = ContextSelection(self.messages, read_budget_chars=100000)
         manager.read_ids.add('read1')
         archive = self.messages + self.exchange
         manager.apply({'history': 'current', 'results': [
@@ -92,3 +92,80 @@ class ContextSelectionTests(unittest.TestCase):
                 messages=self.messages, tools=[REGISTRY['log_set'].declaration],
                 context_selection=True, handle_tool=lambda *args: calls.append(args))
         self.assertEqual(calls, [])
+
+    def test_automatic_budget_applies_when_model_never_selects_context(self):
+        manager = ContextSelection(self.messages, read_budget_chars=2000)
+        archive = list(self.messages)
+        for index in range(5):
+            call_id = f'read{index}'
+            manager.read_ids.add(call_id)
+            archive += [
+                {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': call_id,
+                    'name': 'get_workout_details', 'input': {'workout_id': str(index)}}]},
+                {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': call_id,
+                    'content': f'Workout {index}: ' + 'Exact historical data. ' * 60}]}]
+        view = manager.view(archive)
+        self.assertLessEqual(manager.stats['readCharactersAfter'], 2000)
+        self.assertGreater(manager.stats['compactedResults'], 0)
+        self.assertEqual(view[-1], archive[-1])  # Fresh result remains exact.
+        self.assertEqual(view[:3], self.messages)  # No automatic loss of user constraints.
+        self.assertIn('compacted', view[4]['content'][0]['content'])
+        self.assertNotIn('compacted', archive[4]['content'][0]['content'])
+
+    def test_full_selection_prioritizes_restore_but_cannot_bypass_budget(self):
+        manager = ContextSelection(self.messages, read_budget_chars=1500)
+        manager.read_ids.add('read1')
+        manager.apply({'results': [{'call_id': 'read1', 'mode': 'full'}]})
+        view = manager.view(self.messages + self.exchange)
+        self.assertLessEqual(manager.stats['readCharactersAfter'], 1500)
+        self.assertTrue(json.loads(view[-1]['content'][0]['content'])['compacted'])
+        small = [{'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'read1',
+                   'content': 'Exact selected working sets: 60 kg x 6; RPE unknown.'}]}]
+        self.assertEqual(manager.view(self.messages + small)[-1], small[0])
+
+    def test_mutation_exchanges_are_never_automatically_compacted(self):
+        manager = ContextSelection(self.messages, read_budget_chars=200)
+        mutation = [
+            {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'write',
+                'name': 'start_workout_session', 'input': {'sets': 'exact plan ' * 1000}}]},
+            {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'write',
+                'content': 'Confirmed workout preview. Not started.'}]}]
+        self.assertEqual(manager.view(self.messages + mutation), self.messages + mutation)
+
+    def test_duplicate_evidence_points_to_latest_copy_without_reexecution(self):
+        manager = ContextSelection(self.messages)
+        manager.read_ids.update(['a', 'b'])
+        results = [{'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': key, 'content': 'same exact evidence ' * 100}
+            for key in ['a', 'b']]}]
+        view = manager.view(self.messages + results)
+        receipt = json.loads(view[-1]['content'][0]['content'])
+        self.assertEqual(receipt['sameAsCallId'], 'b')
+        self.assertEqual(view[-1]['content'][1], results[0]['content'][1])
+
+    def test_eight_round_regression_reduces_payload_even_without_context_controls(self):
+        def call(name, key):
+            return {'content': [{'type': 'tool_use', 'name': name, 'id': key, 'input': {}}]}
+        responses = [call('discover_tools', 'discovery')]
+        responses += [call('batch_retrieve', f'batch{i}') for i in range(5)]
+        responses += [call('start_workout_session', 'write'),
+                      {'content': [{'type': 'text', 'text': 'Preview ready, not started.'}]}]
+        declarations = [REGISTRY[name].declaration for name in
+                        ['discover_tools', 'batch_retrieve', 'start_workout_session']]
+        payloads = {}
+        for enabled in [False, True]:
+            calls = []
+            with patch('app.agent.claude_provider._request_json', side_effect=responses) as request:
+                run_claude_agent(api_key='test', model='test', system_instruction='Do not ignore knee pain.',
+                    messages=self.messages, tools=declarations, context_selection=enabled,
+                    handle_tool=lambda name, args, key: calls.append((name, key)) or (
+                        f'{key}: ' + 'Recorded sets and notes. ' * 250 if name == 'batch_retrieve'
+                        else 'Confirmed preview, not started.'))
+            payloads[enabled] = [json.loads(call.args[0].data) for call in request.call_args_list]
+            self.assertEqual(len(calls), 7)
+            self.assertEqual(len(payloads[enabled]), 8)
+            self.assertIn('Confirmed preview, not started.', json.dumps(payloads[enabled][-1]))
+        before = sum(len(json.dumps(p)) for p in payloads[False])
+        after = sum(len(json.dumps(p)) for p in payloads[True])
+        self.assertLess(after, before * 0.8)
+        self.assertNotIn('tools', payloads[True][-1])

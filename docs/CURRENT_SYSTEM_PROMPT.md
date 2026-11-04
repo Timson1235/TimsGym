@@ -6,6 +6,12 @@ Prompt version: `coach-v2.5-request-read-reuse`. Generated for review from the c
 
 Every request receives the shared instructions, exactly one mode block, the tool catalog, and dynamic USER DATA. The coach then appends the current date/time. Recent chat messages are sent separately as conversation messages. Native tool schemas are supplied separately through the provider API.
 
+On the experimental context-selection branch, Claude additionally receives
+`INSTRUCTION` from `backend/app/agent/context_selection.py`. It describes `_context`,
+automatic read-result budgeting, incomplete excerpts and restoration, and the
+latest actual performance included in progression reads. See
+[the experiment contract](CONTEXT_SELECTION.md) for the complete runtime policy.
+
 Edit `backend/app/agent/prompts.py` to change runtime instructions. Catalog entries come from `backend/app/agent/tool_registry.py`. Request assembly is in `backend/app/agent/coach.py`.
 
 ## Shared instructions — always included

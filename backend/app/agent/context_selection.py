@@ -34,16 +34,40 @@ tools: names to offer NEXT round; discover_tools always remains available.
 Omit tools to keep the previous selection. Newly discovered tools become available.
 Mutation exchanges cannot be compacted. Context choices do not execute tools.
 Prefer compact workout summaries first, then details for the selected workout.
+The backend automatically budgets read-result context, even without _context.
+Compacted results are incomplete previews, NOT evidence of absent records.
+Restore a prior read with results mode=full alongside your next useful call, or
+repeat its original read tool to retrieve the exact cached result. Large results
+may still exceed the budget: fetch one workout or one exercise instead of a page
+of full workouts. Never infer omitted sets, effort, notes or search coverage.
+suggest_weight includes lastPerformance (recorded actual sets, not a target).
+Batch those checks for all selected exercises; do not separately fetch histories
+unless more than the latest performance is genuinely needed. For vague references,
+browse recent unfiltered summaries first instead of trying multiple title searches.
 """
 
 
+def _encode(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+
+def _preview(content, limit):
+    """Bounded exact excerpt, never a generated summary or an implied full result."""
+    if len(content) <= limit:
+        return content
+    # This string deliberately is not parsed as a complete JSON document.
+    return content[:max(0, limit - 30)] + ' [INCOMPLETE; restore original]'
+
+
 class ContextSelection:
-    def __init__(self, messages):
+    def __init__(self, messages, read_budget_chars=12000):
         self.initial_count = len(messages)
         self.history = 'all'
         self.results = {}
         self.read_ids = set()
         self.tool_names = None
+        self.read_budget_chars = read_budget_chars
+        self.stats = {}
 
     def split(self, arguments, conversation):
         arguments = deepcopy(arguments)
@@ -87,4 +111,59 @@ class ContextSelection:
                             'compacted': True, 'callId': block['tool_use_id'],
                             'modelNote': selection['summary'],
                             'restore': 'Select this call_id with mode=full in _context.'})
+        self._budget_reads(view)
         return view
+
+    def _budget_reads(self, view):
+        calls = {block['id']: block.get('name') for message in view
+                 if isinstance(message.get('content'), list) for block in message['content']
+                 if block.get('type') == 'tool_use'}
+        reads = [block for message in view if isinstance(message.get('content'), list)
+                 for block in message['content'] if block.get('type') == 'tool_result'
+                 and block['tool_use_id'] in self.read_ids]
+        original_size = sum(len(block['content']) for block in reads)
+        for block in reads:
+            if calls.get(block['tool_use_id']) == 'discover_tools':
+                try:
+                    result = json.loads(block['content'])
+                    if 'availableNextRound' in result:
+                        block['content'] = _encode({'availableNextRound': [
+                            item['name'] for item in result['availableNextRound']]})
+                except (ValueError, TypeError, KeyError):
+                    pass  # Preserve error feedback rather than inventing success.
+        # Keep the latest copy of identical evidence, never a dangling read-* ref.
+        latest, candidates = {}, []
+        for block in reversed(reads):
+            content, call_id = block['content'], block['tool_use_id']
+            receipt = {'compacted': True, 'callId': call_id}
+            if content in latest:
+                receipt['sameAsCallId'] = latest[content]
+            else:
+                latest[content] = call_id
+            candidates.append((block, content, receipt))
+            block['content'] = _encode(receipt)
+        remaining = self.read_budget_chars - sum(len(block['content']) for block in reads)
+        if remaining < 0:
+            raise RuntimeError('Read-result receipt budget exceeded; no model call sent')
+        # Explicit full retention gets priority, but cannot bypass the hard budget.
+        candidates.sort(key=lambda item: self.results.get(item[0]['tool_use_id'], {}).get('mode') != 'full')
+        pending = []
+        for block, content, receipt in candidates:
+            extra = len(content) - len(block['content'])
+            if 'sameAsCallId' not in receipt and extra <= remaining:
+                remaining -= extra
+                block['content'] = content
+            else:
+                pending.append((block, content, receipt))
+        for block, content, receipt in pending:
+            if 'sameAsCallId' in receipt:
+                continue
+            preview = _encode({**receipt, 'excerpt': _preview(content, min(900, remaining // 2))})
+            extra = len(preview) - len(block['content'])
+            if extra <= remaining:
+                block['content'] = preview
+                remaining -= extra
+        self.stats = {'readCharactersBefore': original_size,
+                      'readCharactersAfter': sum(len(block['content']) for block in reads),
+                      'readBudgetCharacters': self.read_budget_chars,
+                      'compactedResults': sum(block['content'].startswith('{"compacted":true') for block in reads)}
