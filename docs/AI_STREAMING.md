@@ -18,6 +18,12 @@ The browser decodes chunked UTF-8 and SSE frames, renders draft text separately 
 
 Claude tool arguments are reassembled and parsed only after complete content blocks. Truncated/interrupted rounds do not execute their tools. A provider failure after an attempted mutation does not replay the request through Gemini. Gemini streaming similarly assembles complete response parts before the agent executes tools.
 
+Empty/whitespace-only Claude responses and `stop_reason=tool_use` responses without
+tool blocks are provider failures, not successful completions. Both JSON and SSE
+paths record an error. Before any mutation attempt, the existing configured
+Gemini fallback may recover; after a mutation attempt, no replay occurs and the
+user is told to check the saved state. There is no automatic same-provider retry.
+
 If a client disconnects, the worker finishes the existing request/persistence but stops buffering events. This is an in-process worker, not a durable background-job service; server termination can still interrupt it. There is no automatic reconnect/replay.
 
 ## Prompt caching

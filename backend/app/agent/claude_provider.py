@@ -273,6 +273,11 @@ def run_claude_agent(
             model_span.output(result)
             if result.get("stop_reason") == "max_tokens":
                 raise RuntimeError("Claude response truncated; tool arguments were not executed")
+            content = result.get("content") or []
+            has_tools = any(block.get("type") == "tool_use" for block in content)
+            has_text = any(block.get("type") == "text" and block.get("text", "").strip() for block in content)
+            if (result.get("stop_reason") == "tool_use" and not has_tools) or not (has_tools or has_text):
+                raise RuntimeError("Claude returned no usable response; no tools were executed for this round")
         except Exception as error:
             request_error = type(error).__name__
             model_span.error(error)

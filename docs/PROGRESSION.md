@@ -40,6 +40,9 @@ For skills, `strategy: "skill"` adds `goal: {targetMovement, currentVariation, t
 - Compare matching configurations, working-set counts and loads, without skipping incompatible sessions to find older successes.
 - Return only status, reasoning, next targets and bounded evidence arrays. Full details remain available through `get_workout_details` on demand.
 - Missing prescriptions/configuration, skipped sets, missing effort or failed targets do not cause a load increase.
+- Completed sessions containing planned working sets remain evidence even if
+  every working set was skipped. They cannot be bypassed to reuse older successes.
+  Unfinished workout drafts remain excluded.
 - Successful sets below the ceiling receive one extra total repetition. Repeated success at the ceiling permits only an explicitly configured equipment increment, with reps reset to the lower boundary.
 - Numeric workout records stay in structured JSON; chat summaries are not the training log.
 

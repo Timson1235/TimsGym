@@ -94,7 +94,7 @@ def recommend_progression(db: dict, *, exercise_id=None, exercise_name='', progr
         if not workout.get('isCompleted', True):
             continue
         entry = next((e for e in workout.get('exercises', []) if e.get('exerciseId') == exercise['id']), None)
-        if entry and any(s.get('completed') and s.get('type', 'working') == 'working' for s in entry.get('sets', [])):
+        if entry and any(s.get('type', 'working') == 'working' for s in entry.get('sets', [])):
             records.append((workout, entry))
         if len(records) == 3:
             break

@@ -300,8 +300,11 @@ class ProviderDiscoveryTests(unittest.TestCase):
     def test_empty_response_is_not_misreported_as_round_exhaustion(self):
         for provider in ['claude', 'gemini']:
             with self.subTest(provider=provider):
-                result, payloads = self.run_loop(provider, [response(text='')])
-                self.assertEqual(len(payloads), 1)
+                rounds = [response(text='')] * (2 if provider == 'claude' else 1)
+                result, payloads = self.run_loop(provider, rounds)
+                self.assertEqual(len(payloads), len(rounds))
+                if provider == 'claude':
+                    self.assertEqual(result['trace']['providerFallback']['reason'], 'provider_error')
                 self.assertEqual(result['trace']['terminationReason'], 'empty_response')
                 self.assertIn('returned no answer', result['reply'])
                 self.assertNotIn('processing limit', result['reply'])

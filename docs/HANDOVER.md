@@ -104,13 +104,19 @@ and one repetition prevent causal claims about small differences. Do not read
 real private conversation/trace payloads without user authorization; use the
 synthetic evaluation traces for agent debugging.
 
-Known unresolved finding at this handover: the request-read-reuse live evaluation
+Historical unresolved provider finding: the request-read-reuse live evaluation
 passed logging clarification and repeat/adapt, but the missing-effort case twice
 produced reconstructed `content=[]` with `stop_reason=tool_use` before tools ran.
 The cause is not established. All 149 backend tests passed at that point. These
 live cases had no cache hits, so they do not establish deduplication savings.
 Local ignored results are under `backend/evals/results/`; they may not exist in
-a fresh clone. Resolve this finding before accepting more context compaction.
+a fresh clone. November 4 hardening now rejects empty/contradictory Claude
+responses as provider failures, permitting configured fallback only before a
+mutation attempt. This prevents silent empty completion but does not establish
+the original provider/parser cause or retroactively pass those live cases.
+Progression also retains completed sessions with entirely skipped working sets
+instead of selecting older successes. Regression tests cover both behaviors.
+Resolve the live-provider finding before accepting more context compaction.
 
 ## Documentation index
 
@@ -126,6 +132,7 @@ a fresh clone. Resolve this finding before accepting more context compaction.
 - [Private-account access](PRIVATE_ACCESS.md)
 - [Budgeted evaluations](SMALL_EVALUATIONS.md)
 - [Next implementations](NEXT_IMPLEMENTATIONS.md) — planned items are not shipped.
+- [November 4 merge verification](MERGE_VERIFICATION.md) — fixes, checks and live-evaluation limitations.
 - [Historical migration plan](FASTAPI_MIGRATION_PLAN.md)
 
 When changing behavior, update its focused document and any prompt snapshot it

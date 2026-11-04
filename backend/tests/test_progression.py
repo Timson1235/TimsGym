@@ -47,6 +47,33 @@ class ProgressionTests(unittest.TestCase):
         for rpe in (-2, 11, float('nan')):
             self.assertEqual(self.recommend(workout(rpe=rpe))['status'], 'needs_review')
 
+    def test_fully_skipped_latest_exercise_holds_instead_of_using_older_successes(self):
+        skipped = workout(21, reps=10)
+        for item in skipped['exercises'][0]['sets']:
+            item['completed'] = False
+        sessions = [skipped, workout(20, reps=10), workout(19, reps=10)]
+        result = self.recommend(*sessions)
+        self.assertEqual(result['status'], 'hold')
+        self.assertEqual(result['sourceWorkoutId'], 'w21')
+        self.assertTrue(all(item['weight'] == 65 for item in result['next']['sets']))
+        review = workout_review(database(*sessions), 'w21')['recommendations'][0]
+        self.assertEqual(review['status'], 'hold')
+
+    def test_fully_skipped_intervening_exercise_breaks_success_streak(self):
+        skipped = workout(19, reps=10)
+        for item in skipped['exercises'][0]['sets']:
+            item['completed'] = False
+        result = self.recommend(workout(20, reps=10), skipped, workout(18, reps=10))
+        self.assertEqual(result['status'], 'hold')
+        self.assertEqual(result['evidence'][1]['workoutId'], 'w19')
+
+    def test_unfinished_workouts_still_do_not_count_as_progression_evidence(self):
+        draft = workout(21, reps=10)
+        draft['isCompleted'] = False
+        result = self.recommend(draft, workout(20, reps=10), workout(19, reps=10))
+        self.assertEqual(result['status'], 'increase_load')
+        self.assertEqual(result['sourceWorkoutId'], 'w20')
+
     def test_load_requires_two_consecutive_comparable_successes(self):
         self.assertEqual(self.recommend(workout(reps=10))['status'], 'hold')
         result = self.recommend(workout(reps=10), workout(19,reps=10))
