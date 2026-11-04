@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Sparkles, Send, Bot, User, Loader2,
   CheckCircle2, Play, ArrowRight, Zap,
-  Trash2, Plus, MessagesSquare
+  Trash2, Plus, MessagesSquare, Square, RotateCcw
 } from 'lucide-react';
 import { DatabaseState, WorkoutSession, AIChatMessage, AIChatSession, AIUsageSummary } from '../types';
 import {
@@ -12,7 +12,9 @@ import {
   fetchAIChatSessions,
   fetchAIUsageSummary,
   sendAIChatMessage,
+  interruptAIChatMessage,
 } from '../lib/api';
+import { retryForResponse, reconcileRetryHistory } from '../lib/chatRetry';
 import { auth } from '../lib/firebase';
 import { readChatCache, cacheChatSessions, cacheChatHistory, selectCachedChat, removeCachedChat } from '../lib/chatCache';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -75,6 +77,10 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState('Thinking through your request…');
+  const [canInterrupt, setCanInterrupt] = useState(false);
+  const [isInterrupting, setIsInterrupting] = useState(false);
+  const [retryMessage, setRetryMessage] = useState<AIChatMessage | null>(null);
+  const runningRequest = useRef<string | null>(null);
   const [isSwitchingThread, setIsSwitchingThread] = useState(false);
   const [threadError, setThreadError] = useState('');
   const threadRequest = useRef(0);
@@ -96,7 +102,8 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       const saved = localStorage.getItem(`timsgym:proposal:${cacheOwner}:${threadId}`);
       savedProposal = saved ? JSON.parse(saved) as WorkoutSession : null;
     } catch { /* Proposal storage is optional. */ }
-    return [DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(history, savedProposal)];
+    const restored = reconcileRetryHistory(history, readChatCache(cacheOwner).histories[threadId] || []);
+    return [DEFAULT_WELCOME_MSG, ...attachWorkoutProposal(restored, savedProposal)];
   };
 
   const loadThread = async (threadId: string) => {
@@ -212,9 +219,11 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
     }
   }, [initialPrompt, activeThreadId, isSwitchingThread]);
 
-  const handleSendMessage = async (textToSend?: string) => {
+  const handleSendMessage = async (textToSend?: string, retryId?: string) => {
     const text = textToSend || inputMessage;
-    if (!text.trim() || isLoading || isSwitchingThread || !activeThreadId) return;
+    if (!text.trim() || runningRequest.current || isLoading || isSwitchingThread || !activeThreadId) return;
+    const clientRequestId = crypto.randomUUID();
+    runningRequest.current = clientRequestId;
     // A background history response must never overwrite a new message.
     const request = ++threadRequest.current;
     setThreadError('');
@@ -226,22 +235,27 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev.map((message) => message.id === retryId ? { ...message, retry: undefined } : message), userMsg]);
     if (!textToSend) setInputMessage('');
     setIsLoading(true);
+    setCanInterrupt(false);
+    setIsInterrupting(false);
     setStreamingText('');
     setStreamStatus('Connecting to the coach…');
 
     try {
       const response = await sendAIChatMessage(text, activeWorkout, activeThreadId, (event) => {
         if (request !== threadRequest.current) return;
-        if (event.type === 'delta') {
+        if (event.type === 'ready') {
+          setCanInterrupt(event.requestId === clientRequestId);
+        } else if (event.type === 'delta') {
           setStreamingText((current) => current + event.text);
           setStreamStatus('Writing your answer…');
         } else if (event.type === 'reset') setStreamingText('');
         else if (event.type === 'status') setStreamStatus(event.message);
-      });
+      }, clientRequestId);
       if (request !== threadRequest.current) return;
+      setCanInterrupt(false);
 
       if (response.usage) {
         setSessionUsage((current) => mergeAIUsage(current, response.usage));
@@ -276,6 +290,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         toolsUsed: response.toolsUsed,
         usage: response.usage,
         trace: response.trace,
+        retry: retryForResponse(text, response),
         suggestedAction: workoutProposal
           ? { type: 'workout_proposed', workout: workoutProposal.data }
           : undefined,
@@ -299,15 +314,37 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
         content: "Die Verbindung zum Coach wurde unterbrochen. Änderungen könnten bereits gespeichert sein. Lade den Chat neu und prüfe dein Workout, bevor du die Anfrage wiederholst.",
+        retry: { text, needsReview: true },
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
+      if (runningRequest.current === clientRequestId) runningRequest.current = null;
       if (request === threadRequest.current) {
         setIsLoading(false);
+        setCanInterrupt(false);
+        setIsInterrupting(false);
         setStreamingText('');
       }
     }
+  };
+
+  const handleInterrupt = async () => {
+    if (!runningRequest.current || !canInterrupt || isInterrupting) return;
+    setIsInterrupting(true);
+    setStreamStatus('Stopping after the current operation…');
+    try {
+      await interruptAIChatMessage(runningRequest.current);
+    } catch (error) {
+      setIsInterrupting(false);
+      setThreadError((error as Error).message);
+    }
+  };
+
+  const handleRetry = (message: AIChatMessage) => {
+    if (!message.retry || isLoading) return;
+    if (message.retry.needsReview) setRetryMessage(message);
+    else void handleSendMessage(message.retry.text, message.id);
   };
 
   const handleNewChat = async () => {
@@ -494,6 +531,12 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                     <AITraceDetails trace={msg.trace} />
                   )}
 
+                  {msg.retry && <button type="button" disabled={isLoading || isSwitchingThread}
+                    onClick={() => handleRetry(msg)} title="Try this message again"
+                    className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">
+                    <RotateCcw className="h-4 w-4" /> Try again
+                  </button>}
+
                   <span className={`block text-xs font-mono mt-1 text-right ${msg.role === 'user' ? 'text-brand-100' : 'text-slate-400'}`}>
                     {msg.timestamp}
                   </span>
@@ -527,7 +570,7 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 <div className="flex items-center gap-2 rounded-lg rounded-tl-none border border-slate-200 bg-white px-3.5 py-2 shadow-xs">
                   <Loader2 className="h-3.5 w-3.5 text-brand-600 animate-spin" />
                   <span className="text-xs text-slate-500 font-medium">
-                    {streamStatus}
+                    {isInterrupting ? 'Stopping after the current operation…' : streamStatus}
                   </span>
                 </div>
               </div>
@@ -582,15 +625,20 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
                 className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400"
                 disabled={isLoading}
               />
-              <button
+              {isLoading ? <button type="button" onClick={handleInterrupt}
+                aria-label="Interrupt response" title={isInterrupting ? 'Stopping…' : 'Interrupt response'}
+                disabled={!canInterrupt || isInterrupting}
+                className="app-icon-button bg-rose-700 text-white hover:bg-rose-800 disabled:opacity-40">
+                {isInterrupting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4 fill-current" />}
+              </button> : <button
                 type="submit"
                 aria-label="Send message"
                 title="Send message"
                 disabled={!inputMessage.trim() || !activeThreadId || isLoading || isSwitchingThread}
                 className="app-icon-button app-primary shadow-sm disabled:opacity-40"
               >
-                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </button>
+                <Send className="h-4 w-4" />
+              </button>}
             </form>
           </div>
 
@@ -599,6 +647,19 @@ export const AICoachMainView: React.FC<AICoachMainViewProps> = ({
 
 
       </div>
+
+      <ConfirmDialog
+        isOpen={Boolean(retryMessage)}
+        title="Try this message again?"
+        description="The previous request may already have made changes. Check your workout and saved data first. Sending it again can repeat those changes."
+        confirmLabel="Try again"
+        tone="default"
+        onConfirm={() => {
+          if (retryMessage?.retry) void handleSendMessage(retryMessage.retry.text, retryMessage.id);
+          setRetryMessage(null);
+        }}
+        onClose={() => setRetryMessage(null)}
+      />
 
       <ConfirmDialog
         isOpen={isDeleteChatDialogOpen}

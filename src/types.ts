@@ -135,6 +135,7 @@ export interface AIChatMessage {
   toolsUsed?: string[]; // debug: which agent tools fired for this reply
   usage?: AIUsage;
   trace?: AITrace;
+  retry?: { text: string; needsReview: boolean };
   suggestedAction?: {
     type: 'apply_weight' | 'add_exercise' | 'start_routine' | 'workout_proposed';
     exerciseId?: string;

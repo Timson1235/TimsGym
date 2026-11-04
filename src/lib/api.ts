@@ -178,14 +178,21 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
   }
 }
 
-export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string, onEvent?: (event: ChatStreamEvent) => void) {
+export async function interruptAIChatMessage(requestId: string) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`/api/ai/chat/${encodeURIComponent(requestId)}/interrupt`, { method: 'POST', headers });
+  // Completion can race the interrupt click; the original stream is authoritative.
+  if (!response.ok && response.status !== 404) throw new Error('Could not interrupt the coach. Please try again.');
+}
+
+export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string, onEvent?: (event: ChatStreamEvent) => void, clientRequestId?: string) {
   const requestStarted = performance.now();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, activeWorkoutState, threadId, stream: Boolean(onEvent) }),
+      body: JSON.stringify({ message, activeWorkoutState, threadId, stream: Boolean(onEvent), clientRequestId }),
     });
     if (onEvent && !res.ok) throw new Error(`Coach request failed (HTTP ${res.status})`);
     const payload = res.headers.get('Content-Type')?.includes('text/event-stream') && onEvent
