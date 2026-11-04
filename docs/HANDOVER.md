@@ -56,7 +56,8 @@ launch scripts and Dockerfile.
    There is no shared cross-user or cross-request result cache.
 6. Tool results feed subsequent model rounds. Keep references resolvable if
    changing context retention. Do not remove prior results without preserving
-   the evidence they contain. Full round compaction is not implemented.
+   the evidence they contain. The experimental Claude context-selection branch
+   supports reversible read-result compaction; see [context selection](CONTEXT_SELECTION.md).
 7. Streaming updates the client. Actions and final state are returned through
    the existing chat contract. A workout preview is not a started or saved
    completed workout. Never replay on another provider after a mutation attempt.

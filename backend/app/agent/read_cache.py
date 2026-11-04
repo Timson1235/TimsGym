@@ -10,7 +10,8 @@ READ_NAMES = {'get_session_summary', 'get_workout_details', 'get_exercise_histor
 
 
 class RequestReadCache:
-    def __init__(self):
+    def __init__(self, compact_feedback=True):
+        self.compact_feedback = compact_feedback
         self.generation = 0
         self.values, self.sent, self.workouts, self.workout_refs = {}, {}, {}, {}
         self.hits = self.misses = 0
@@ -62,6 +63,9 @@ class RequestReadCache:
         return deepcopy(value)
 
     def feedback(self, name, args, value, db):
+        if not self.compact_feedback:
+            # Context views own compaction; legacy cross-result refs could dangle.
+            return deepcopy(value)
         if name == 'batch_retrieve':
             requests = {item['key']:item for item in args['requests']}
             output = deepcopy(value)

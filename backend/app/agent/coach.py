@@ -248,7 +248,8 @@ def run_chat(
     usage = None
     MAX_STEPS = MAX_MODEL_ROUNDS
     termination_reason = None
-    read_cache = RequestReadCache()
+    read_cache = RequestReadCache(compact_feedback=not (
+        settings.CLAUDE_API_KEY and settings.CLAUDE_CONTEXT_SELECTION))
     active_tool_span = None
     def execute_tool(name: str, args: dict, call_id: str = "") -> str:
         nonlocal active_tool_span
@@ -365,6 +366,7 @@ def run_chat(
                 debug_payloads=settings.AI_DEBUG_PROMPTS,
                 on_event=provider_emit if on_event else None,
                 prompt_caching=settings.CLAUDE_PROMPT_CACHING,
+                context_selection=settings.CLAUDE_CONTEXT_SELECTION,
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
