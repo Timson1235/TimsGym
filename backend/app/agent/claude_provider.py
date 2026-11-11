@@ -1,5 +1,6 @@
 """Minimal Anthropic Messages client using only the Python standard library."""
 import json
+from .pricing import estimate_claude_cost
 import logging
 import ssl
 import time
@@ -318,6 +319,9 @@ def run_claude_agent(
                 on_trace_step(trace_step)
 
         response_usage = result.get("usage", {})
+        round_cost = estimate_claude_cost(model, response_usage)
+        usage["estimatedCostUsd"] = (usage["estimatedCostUsd"] + round_cost
+                                     if usage["estimatedCostUsd"] is not None and round_cost is not None else None)
         usage["inputTokens"] += response_usage.get("input_tokens", 0)
         usage["outputTokens"] += response_usage.get("output_tokens", 0)
         usage["cacheCreationTokens"] += response_usage.get("cache_creation_input_tokens", 0)
@@ -344,12 +348,6 @@ def run_claude_agent(
                 usage["inputTokens"] + usage["outputTokens"]
                 + usage["cacheCreationTokens"] + usage["cacheReadTokens"]
             )
-            usage["estimatedCostUsd"] = (
-                usage["inputTokens"] * 2
-                + usage["outputTokens"] * 10
-                + usage["cacheCreationTokens"] * 2.5
-                + usage["cacheReadTokens"] * 0.2
-            ) / 1_000_000
             return {"text": text, "usage": usage, "traceSteps": trace_steps,
                     'terminationReason': 'round_limit' if finalizing else ('completed' if text else 'empty_response')}
 
@@ -402,12 +400,6 @@ def run_claude_agent(
         usage["inputTokens"] + usage["outputTokens"]
         + usage["cacheCreationTokens"] + usage["cacheReadTokens"]
     )
-    usage["estimatedCostUsd"] = (
-        usage["inputTokens"] * 2
-        + usage["outputTokens"] * 10
-        + usage["cacheCreationTokens"] * 2.5
-        + usage["cacheReadTokens"] * 0.2
-    ) / 1_000_000
     return {"text": "", "usage": usage, "traceSteps": trace_steps, 'terminationReason': termination_reason}
 
 
@@ -458,9 +450,6 @@ def generate_claude_text(
             "inputTokens": input_tokens, "outputTokens": output_tokens,
             "cacheCreationTokens": cache_creation, "cacheReadTokens": cache_read,
             "totalTokens": input_tokens + output_tokens + cache_creation + cache_read,
-            "estimatedCostUsd": (
-                input_tokens * 2 + output_tokens * 10
-                + cache_creation * 2.5 + cache_read * 0.2
-            ) / 1_000_000,
+            "estimatedCostUsd": estimate_claude_cost(model, raw_usage),
         },
     }

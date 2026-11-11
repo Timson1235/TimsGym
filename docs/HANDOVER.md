@@ -140,3 +140,13 @@ When changing behavior, update its focused document and any prompt snapshot it
 changes. Show the user clickable changed paths and relevant snippets/diffs.
 Leave an explicit note about unresolved checks rather than presenting assumptions
 as tested behavior. Do not add generated-by or AI co-author attribution to commits.
+
+## Coaching model (November 11, 2026)
+
+The default coach is now `claude-haiku-5-5` for lower inference cost. Configure
+`CLAUDE_MODEL` to override it. `agent/pricing.py` calculates model-specific
+estimates per provider round, including Haiku's over-100,000-input-token tier;
+unknown models return an unknown estimate. Background Claude summaries use the
+same pricing helper. The existing context-compaction limitations still apply.
+The evaluation runner retains its explicit model flag; select Haiku when testing
+this production default.

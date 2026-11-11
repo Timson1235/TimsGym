@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     APP_ALLOWED_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
     TRACE_ADMIN_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
     CLAUDE_API_KEY: str = ""
-    CLAUDE_MODEL: str = "claude-sonnet-5-5"
+    CLAUDE_MODEL: str = "claude-haiku-5-5"
     CLAUDE_PROMPT_CACHING: bool = True
     CLAUDE_CONTEXT_SELECTION: bool = True
     CLAUDE_TIMEOUT_SECONDS: float = 45.0
