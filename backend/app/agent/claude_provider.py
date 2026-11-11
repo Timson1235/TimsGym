@@ -14,6 +14,10 @@ except ImportError:  # Local minimal test environments can use the OS CA store.
 
 from .. import tracing
 from .tool_registry import RoundBudget, MAX_MODEL_ROUNDS, FINAL_RESPONSE_INSTRUCTION
+from .context_selection import ContextSelection, CONTROL_SCHEMA, INSTRUCTION
+from .tool_registry import REGISTRY
+from copy import deepcopy
+from jsonschema import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +202,12 @@ def run_claude_agent(
     prompt_caching: bool = True,
     get_tools: Callable[[], list[dict]] | None = None,
     max_output_tokens: int = 4096,
+    context_selection: bool = False,
 ) -> dict:
     conversation = list(messages)
+    selection = ContextSelection(messages) if context_selection else None
+    if selection:
+        system_instruction += '\n' + INSTRUCTION
     usage = {
         "provider": "claude",
         "model": model,
@@ -219,22 +227,33 @@ def run_claude_agent(
         if finalizing:
             conversation.append({'role': 'user', 'content': FINAL_RESPONSE_INSTRUCTION})
         current_tools = get_tools() if get_tools else tools
+        if selection and selection.tool_names is not None:
+            current_tools = [tool for tool in current_tools
+                             if tool['name'] in selection.tool_names or tool['name'] == 'discover_tools']
         offered = {tool['name'] for tool in current_tools}
         claude_tools = [{
             'name': tool['name'], 'description': tool.get('description', ''),
             'input_schema': _normalize_schema(tool['parameters']), 'strict': False,
         } for tool in current_tools]
+        if selection:
+            for tool in claude_tools:
+                tool['input_schema'].setdefault('properties', {})['_context'] = deepcopy(CONTROL_SCHEMA)
         if prompt_caching and claude_tools:
             claude_tools[-1]['cache_control'] = {'type': 'ephemeral'}
         payload = {
             "model": model,
             "max_tokens": max_output_tokens,
             "system": _system_blocks(system_instruction, prompt_caching),
-            "messages": conversation,
+            "messages": selection.view(conversation) if selection else conversation,
             "tools": claude_tools,
         }
         if finalizing:
             payload['tool_choice'] = {'type': 'none'}
+            if selection:
+                # No tools can run in this round, so their schemas serve no purpose.
+                payload.pop('tools')
+                payload.pop('tool_choice')
+                offered = set()
         if on_event:
             payload["stream"] = True
             on_event({"type": "reset"})
@@ -309,6 +328,10 @@ def run_claude_agent(
         budget.record([call.get('name', '') for call in tool_calls])
         trace_step["toolsOffered"] = sorted(offered)
         trace_step['finalResponseOnly'] = finalizing
+        trace_step['contextSelection'] = bool(selection)
+        trace_step['contextCharacters'] = len(json.dumps(payload['messages']))
+        if selection:
+            trace_step['contextBudget'] = dict(selection.stats)
         trace_step["stopReason"] = result.get("stop_reason")
         trace_step["toolCalls"] = [call.get("name", "") for call in tool_calls]
         if not tool_calls:
@@ -348,7 +371,24 @@ def run_claude_agent(
                         rejected.output({'feedbackToModel':rejection})
                     feedback = rejection
                 else:
-                    feedback = handle_tool(name, call.get('input') or {}, call.get('id', ''))
+                    arguments = call.get('input') or {}
+                    control = None
+                    try:
+                        if selection:
+                            arguments, control = selection.split(arguments, conversation)
+                            unknown = set((control or {}).get('tools', [])) - set(REGISTRY)
+                            if unknown:
+                                raise ValueError('Unknown context tool names: ' + ', '.join(sorted(unknown)))
+                    except (ValueError, TypeError, ValidationError) as error:
+                        feedback = 'Context selection rejected; no tool executed: ' + str(error)
+                    else:
+                        feedback = handle_tool(name, arguments, call.get('id', ''))
+                        if selection:
+                            selection.apply(control)
+                            if name == 'discover_tools' and selection.tool_names is not None:
+                                selection.tool_names.update(arguments.get('names', []))
+                            if name in REGISTRY and REGISTRY[name].read_only:
+                                selection.read_ids.add(call.get('id', ''))
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": call.get("id", ""),

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     CLAUDE_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-sonnet-5-5"
     CLAUDE_PROMPT_CACHING: bool = True
+    CLAUDE_CONTEXT_SELECTION: bool = True
     CLAUDE_TIMEOUT_SECONDS: float = 45.0
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"

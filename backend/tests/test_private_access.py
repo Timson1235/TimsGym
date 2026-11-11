@@ -59,6 +59,7 @@ class PrivateAccessTests(unittest.TestCase):
         routes=[('GET','/api/access',None),('GET','/api/db',None),('POST','/api/db/workout',{}),
                 ('POST','/api/db/reset',{}),('GET','/api/ai/history',None),('GET','/api/ai/sessions',None),
                 ('POST','/api/ai/chat',{'message':'hello','stream':True,'uid':OWNER}),
+                ('POST','/api/ai/chat/example/interrupt',None),
                 ('GET','/api/ai/traces',None),('GET','/api/ai/traces/example?payloads=true',None),
                 ('GET','/api/ai/traces/example/payload/payload',None)]
         with patch.object(auth.crud,'get_or_create_user') as bootstrap,patch('app.routers.ai.coach.run_chat') as run:
@@ -71,6 +72,7 @@ class PrivateAccessTests(unittest.TestCase):
 
     def test_missing_or_bad_tokens_and_wrong_issuer_are_rejected(self):
         self.assertEqual(self.client.get('/api/access').status_code,401)
+        self.assertEqual(self.client.post('/api/ai/chat/example/interrupt').status_code,401)
         self.verify.side_effect=ValueError('invalid signature')
         self.assertEqual(self.client.get('/api/access',headers=self.headers).status_code,401)
         self.verify.side_effect=None

@@ -46,6 +46,12 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   const [loadingAiExerciseId, setLoadingAiExerciseId] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, ProgressionRecommendation>>({});
   const [suggestionError, setSuggestionError] = useState('');
+  const firstUnfinishedExercise = activeWorkout.exercises.find((exercise) => exercise.sets.some((set) => !set.completed))?.id
+    || activeWorkout.exercises[0]?.id || null;
+  const [expanded, setExpanded] = useState<{ workoutId: string; exerciseId: string | null }>(() => ({
+    workoutId: activeWorkout.id, exerciseId: firstUnfinishedExercise,
+  }));
+  const expandedExerciseId = expanded.workoutId === activeWorkout.id ? expanded.exerciseId : firstUnfinishedExercise;
 
   // Derive duration from the persisted start time, including after tab switches.
   useEffect(() => {
@@ -112,6 +118,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     });
 
     setIsExerciseModalOpen(false);
+    setExpanded({ workoutId: activeWorkout.id, exerciseId: newWorkoutExercise.id });
   };
 
   const handleRemoveExercise = (weId: string) => {
@@ -296,33 +303,38 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       </div>
 
       {/* Exercises Section */}
-      <div className="space-y-5">
+      <div className="border-y border-slate-200">
         {activeWorkout.exercises.map((we, exIdx) => {
           const lastPerf = getLastPerformanceForExercise(we.exerciseId, workouts);
+          const isExpanded = expandedExerciseId === we.id;
+          const completedSets = we.sets.filter((set) => set.completed).length;
 
           return (
             <div
               key={we.id}
-              className="app-surface relative space-y-4 overflow-hidden p-5"
+              className="border-b border-slate-200 bg-white px-4 py-3 last:border-b-0 sm:px-5"
             >
               
               {/* Exercise Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3.5">
-                <div className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-lg bg-brand-50 text-brand-700 font-mono font-bold text-xs flex items-center justify-center border border-brand-200">
+              <button type="button" className="flex min-h-14 w-full items-center gap-3 text-left"
+                aria-expanded={isExpanded} aria-controls={`workout-exercise-${we.id}`}
+                onClick={() => setExpanded({ workoutId: activeWorkout.id, exerciseId: isExpanded ? null : we.id })}>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-brand-200 bg-brand-50 font-mono text-xs font-bold text-brand-700">
                     #{exIdx + 1}
                   </span>
-                  <div>
-                    <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                  <span className="min-w-0 flex-1">
+                    <span className="block break-words text-base font-semibold text-slate-900">
                       {we.exerciseName}
-                      <span className="text-xs font-bold tracking-normal px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
-                        {we.category}
-                      </span>
-                    </h3>
-                  </div>
-                </div>
+                    </span>
+                    <span className="text-xs text-slate-500">{we.category} · {completedSets}/{we.sets.length} sets complete</span>
+                  </span>
+                  {we.sets.length > 0 && completedSets === we.sets.length && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-label="Exercise complete" />}
+                  <ChevronDown className={`h-5 w-5 shrink-0 text-slate-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+              </button>
 
-                <div className="flex items-center gap-2">
+              <div id={`workout-exercise-${we.id}`} hidden={!isExpanded}>
+                <div className="space-y-4 border-t border-slate-200 pt-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => handleGetAISuggestion(we)}
                     disabled={loadingAiExerciseId === we.id}
@@ -352,7 +364,6 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
-              </div>
 
               {/* Previous Performance Badge */}
               {lastPerf && (
@@ -491,6 +502,8 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
                 Add Set
               </button>
 
+                </div>
+              </div>
             </div>
           );
         })}

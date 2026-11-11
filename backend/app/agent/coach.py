@@ -22,6 +22,7 @@ from ..memory import conversational as memory
 from ..memory import summary as summ
 from ..memory import summary_jobs
 from ..models import User
+from ..chat_control import ChatInterrupted
 from . import tools
 from .read_cache import RequestReadCache, READ_NAMES
 from .claude_provider import run_claude_agent
@@ -142,6 +143,7 @@ def run_chat(
     request_id: Optional[str] = None,
     thread_id: Optional[str] = None,
     on_event: Callable[[dict], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> dict:
     request_started = time.perf_counter()
     request_id = request_id or str(uuid.uuid4())
@@ -153,6 +155,14 @@ def run_chat(
             first_text_ms = round((time.perf_counter() - request_started) * 1000)
         if on_event:
             on_event(event)
+
+    def check_interrupted():
+        if is_cancelled and is_cancelled():
+            raise ChatInterrupted()
+
+    def provider_emit(event: dict):
+        check_interrupted()
+        emit(event)
     emit({"type": "status", "message": "Loading your training context…"})
     with tracing.Span('context', 'Build model context', {'message':message}) as context_span:
         db = crud.get_user_database_state(session, user.id)
@@ -171,6 +181,8 @@ def run_chat(
             }
             return {
                 "reply": "AI is not configured (CLAUDE_API_KEY or GEMINI_API_KEY missing).",
+                "status": "error",
+                "retrySafe": True,
                 "actionExecuted": None,
                 "toolsUsed": [],
                 "usage": None,
@@ -236,10 +248,12 @@ def run_chat(
     usage = None
     MAX_STEPS = MAX_MODEL_ROUNDS
     termination_reason = None
-    read_cache = RequestReadCache()
+    read_cache = RequestReadCache(compact_feedback=not (
+        settings.CLAUDE_API_KEY and settings.CLAUDE_CONTEXT_SELECTION))
     active_tool_span = None
     def execute_tool(name: str, args: dict, call_id: str = "") -> str:
         nonlocal active_tool_span
+        check_interrupted()
         with tracing.Span('tool', name, {'callId':call_id,'arguments':args}) as span:
             active_tool_span = span
             feedback = _execute_tool(name, args, call_id)
@@ -337,6 +351,7 @@ def run_chat(
         ]
         claude_messages.append({"role": "user", "content": message})
         try:
+            check_interrupted()
             claude_result = run_claude_agent(
                 api_key=settings.CLAUDE_API_KEY,
                 model=settings.CLAUDE_MODEL,
@@ -349,13 +364,20 @@ def run_chat(
                 max_steps=MAX_STEPS,
                 timeout_seconds=settings.CLAUDE_TIMEOUT_SECONDS,
                 debug_payloads=settings.AI_DEBUG_PROMPTS,
-                on_event=emit if on_event else None,
+                on_event=provider_emit if on_event else None,
                 prompt_caching=settings.CLAUDE_PROMPT_CACHING,
+                context_selection=settings.CLAUDE_CONTEXT_SELECTION,
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
             termination_reason = claude_result.get('terminationReason')
+            check_interrupted()
+        except ChatInterrupted:
+            reply_text = ''
+            termination_reason = 'interrupted'
+            emit({'type': 'reset'})
         except Exception as error:
+            termination_reason = 'provider_error'
             emit({"type": "reset"})
             # Never replay a request on another model after a mutation succeeded.
             claude_failed = not mutation_attempted
@@ -376,7 +398,7 @@ def run_chat(
     if claude_failed and _client:
         read_cache.invalidate()
     gemini_budget = RoundBudget()
-    for step_index in range(MAX_STEPS if (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
+    for step_index in range(MAX_STEPS if termination_reason != 'interrupted' and (not settings.CLAUDE_API_KEY or claude_failed) and _client else 0):
         finalizing = gemini_budget.exhausted or step_index == MAX_STEPS - 1
         if finalizing:
             contents.append(types.Content(role='user', parts=[types.Part(text=FINAL_RESPONSE_INSTRUCTION)]))
@@ -387,8 +409,10 @@ def run_chat(
         round_span = tracing.Span('model_round', f'Gemini round {step_index + 1}',
             {'model':COACH_MODEL,'contents':contents,'config':config})
         try:
+            check_interrupted()
             with tracing.parent_span(round_span.id):
-                response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config, on_event=emit if on_event else None)
+                response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config, on_event=provider_emit if on_event else None)
+            check_interrupted()
             round_span.output(response)
             round_span.finish()
             metadata = getattr(response, "usage_metadata", None)
@@ -406,7 +430,14 @@ def run_chat(
                     "totalTokens": previous_usage.get("totalTokens", 0) + input_tokens + output_tokens,
                     "estimatedCostUsd": 0,
                 }
+        except ChatInterrupted as error:
+            round_span.finish(error)
+            termination_reason = 'interrupted'
+            reply_text = ''
+            emit({'type': 'reset'})
+            break
         except Exception as e:
+            termination_reason = 'provider_error'
             round_span.finish(e)
             trace_steps.append({
                 "kind": "llm",
@@ -464,7 +495,13 @@ def run_chat(
                         rejected.error(ValueError(feedback))
                         rejected.output({'feedbackToModel':feedback})
                 else:
-                    feedback = execute_tool(call.name, args, call.id or "")
+                    try:
+                        feedback = execute_tool(call.name, args, call.id or "")
+                    except ChatInterrupted:
+                        termination_reason = 'interrupted'
+                        reply_text = ''
+                        emit({'type': 'reset'})
+                        break
             contents.append(types.Content(
                 role="user",
                 parts=[types.Part.from_function_response(
@@ -472,6 +509,8 @@ def run_chat(
                     response={"result": feedback},
                 )],
             ))
+        if termination_reason == 'interrupted':
+            break
         if finalizing:
             termination_reason = 'round_limit'
             break
@@ -481,7 +520,9 @@ def run_chat(
             _FALLBACK_REPLIES[action['type']](action.get('data'))
             for action in actions_executed if action.get('type') in _FALLBACK_REPLIES
         ]
-        if termination_reason == 'empty_response':
+        if termination_reason == 'interrupted':
+            reply_text = 'Stopped. Changes already made are kept; no further actions will be performed.'
+        elif termination_reason == 'empty_response':
             reply_text = "The coach returned no answer. No further actions were performed."
         else:
             termination_reason = termination_reason or 'round_limit'
@@ -546,6 +587,8 @@ def run_chat(
     # Detailed execution records are persisted separately, never printed here.
     return {
         "reply": reply_text,
+        "status": 'interrupted' if termination_reason == 'interrupted' else 'error' if termination_reason in {'provider_error', 'empty_response', 'round_limit'} else 'completed',
+        "retrySafe": not mutation_attempted,
         "actionExecuted": action_executed,
         "actionsExecuted": actions_executed,
         "activeWorkoutState": active_workout_state,
