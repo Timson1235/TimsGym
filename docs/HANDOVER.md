@@ -147,6 +147,28 @@ The default coach is now `claude-haiku-5-5` for lower inference cost. Configure
 `CLAUDE_MODEL` to override it. `agent/pricing.py` calculates model-specific
 estimates per provider round, including Haiku's over-100,000-input-token tier;
 unknown models return an unknown estimate. Background Claude summaries use the
-same pricing helper. The existing context-compaction limitations still apply.
+same pricing helper. Structured batch compaction and preview-round reservation now address the
+large-workout failure; see CONTEXT_SELECTION.md for retained evidence, soft
+budget overflow, tests and limitations.
 The evaluation runner retains its explicit model flag; select Haiku when testing
 this production default.
+
+## Stream recovery and usage accounting (local changes, November 11)
+
+Claude flushes a final SSE event at EOF and retries an incomplete stream once as
+non-streaming generation with the same conversation. Completed tools are not replayed;
+recovery is prohibited after any mutation attempt. Partial tool arguments never execute.
+Private traces record stream event counts, request ID and recovery attempts. A provider
+fallback may still be necessary if recovery fails; network failures are not eliminated.
+
+`agent/usage.py` aggregates provider attempts across fallback, includes Gemini thinking
+tokens, and marks incomplete usage as a lower bound. Missing costs are null, not zero;
+known portions remain available. The metric's existing JSON steps retain completeness
+without a database migration. Legacy Gemini zero estimates are unknown in summaries.
+Set `GEMINI_BILLING_TIER=free` only after checking the API project's tier in AI Studio;
+`unknown` is the default, `paid` uses the supported model's dated price schedule.
+This setting only controls estimates and does not change provider billing. A Google
+consumer subscription is not proof of the API project's billing tier. See
+https://aistudio.google.com/docs/billing and https://aistudio.google.com/docs/pricing.
+Workout preview schemas require positive weight increments; bodyweight/unknown
+increments must be omitted, matching the progression validator.

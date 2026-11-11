@@ -1,6 +1,6 @@
 # Current coach system prompt
 
-Prompt version: `coach-v2.5-request-read-reuse`. Generated for review from the current Python source. This document is a snapshot, not the runtime source of truth.
+Prompt version: `coach-v2.6-structured-evidence`. Generated for review from the current Python source. This document is a snapshot, not the runtime source of truth.
 
 ## How it is assembled
 

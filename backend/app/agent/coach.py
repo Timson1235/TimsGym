@@ -24,6 +24,7 @@ from ..memory import summary_jobs
 from ..models import User
 from ..chat_control import ChatInterrupted
 from . import tools
+from .usage import UsageLedger
 from .read_cache import RequestReadCache, READ_NAMES
 from .claude_provider import run_claude_agent
 from .tool_registry import ToolSession, RoundBudget, MAX_MODEL_ROUNDS, FINAL_RESPONSE_INSTRUCTION
@@ -49,10 +50,11 @@ def _is_billing_error(error: Exception) -> bool:
             or "insufficient credit" in message)
 
 
-def _generate_with_retry(client: genai.Client, model: str, contents: list, config: types.GenerateContentConfig, on_event=None):
+def _generate_with_retry(client: genai.Client, model: str, contents: list, config: types.GenerateContentConfig, on_event=None, on_usage_failed=None):
     last_err = None
     models = list(dict.fromkeys([model, COACH_FALLBACK_MODEL, COACH_LAST_RESORT_MODEL]))
     for candidate_model in models:
+        metadata = None
         try:
             with tracing.Span("provider_attempt", candidate_model, {"model":candidate_model,"contents":contents,"config":config}) as attempt:
                 visible_text = []
@@ -90,6 +92,8 @@ def _generate_with_retry(client: genai.Client, model: str, contents: list, confi
                 attempt.output(response)
                 return response
         except Exception as e:
+            if on_usage_failed:
+                on_usage_failed(candidate_model, metadata.model_dump(exclude_none=True) if metadata else {})
             last_err = e
             msg = str(e)
             # Billing applies to the provider account, so model retries hide the cause.
@@ -246,6 +250,7 @@ def run_chat(
     tools_used: list[str] = []  # debug: every tool invoked this turn
     reply_text = ""
     usage = None
+    usage_ledger = UsageLedger(settings.GEMINI_BILLING_TIER)
     MAX_STEPS = MAX_MODEL_ROUNDS
     termination_reason = None
     read_cache = RequestReadCache(compact_feedback=not (
@@ -367,6 +372,7 @@ def run_chat(
                 on_event=provider_emit if on_event else None,
                 prompt_caching=settings.CLAUDE_PROMPT_CACHING,
                 context_selection=settings.CLAUDE_CONTEXT_SELECTION,
+                on_usage=lambda raw, complete: usage_ledger.add("claude", settings.CLAUDE_MODEL, raw, complete),
             )
             reply_text = claude_result["text"]
             usage = claude_result["usage"]
@@ -405,31 +411,21 @@ def run_chat(
         current_tools = tool_session.declarations()
         config.tools = [types.Tool(function_declarations=current_tools)]
         config.tool_config = types.ToolConfig(function_calling_config=types.FunctionCallingConfig(mode='NONE' if finalizing else 'AUTO'))
+        attempt_count_before = len(usage_ledger.attempts)
         model_started = time.perf_counter()
         round_span = tracing.Span('model_round', f'Gemini round {step_index + 1}',
             {'model':COACH_MODEL,'contents':contents,'config':config})
         try:
             check_interrupted()
             with tracing.parent_span(round_span.id):
-                response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config, on_event=provider_emit if on_event else None)
-            check_interrupted()
+                response = _generate_with_retry(_client, model=COACH_MODEL, contents=contents, config=config, on_event=provider_emit if on_event else None,
+                    on_usage_failed=lambda model, raw: usage_ledger.add("gemini", model, raw, False))
             round_span.output(response)
             round_span.finish()
-            metadata = getattr(response, "usage_metadata", None)
-            if metadata:
-                input_tokens = getattr(metadata, "prompt_token_count", 0) or 0
-                output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
-                previous_usage = usage if usage and usage.get("provider") == "gemini" else {}
-                usage = {
-                    "provider": "gemini",
-                    "model": getattr(response, "model_version", None) or COACH_MODEL,
-                    "inputTokens": previous_usage.get("inputTokens", 0) + input_tokens,
-                    "outputTokens": previous_usage.get("outputTokens", 0) + output_tokens,
-                    "cacheCreationTokens": 0,
-                    "cacheReadTokens": previous_usage.get("cacheReadTokens", 0) + (getattr(metadata, "cached_content_token_count", 0) or 0),
-                    "totalTokens": previous_usage.get("totalTokens", 0) + input_tokens + output_tokens,
-                    "estimatedCostUsd": 0,
-                }
+            metadata = getattr(response, 'usage_metadata', None)
+            usage_ledger.add('gemini', getattr(response, 'model_version', None) or COACH_MODEL,
+                             metadata.model_dump(exclude_none=True) if metadata else {}, bool(metadata))
+            check_interrupted()
         except ChatInterrupted as error:
             round_span.finish(error)
             termination_reason = 'interrupted'
@@ -437,6 +433,8 @@ def run_chat(
             emit({'type': 'reset'})
             break
         except Exception as e:
+            if len(usage_ledger.attempts) == attempt_count_before:
+                usage_ledger.add('gemini', COACH_MODEL, {}, False)
             termination_reason = 'provider_error'
             round_span.finish(e)
             trace_steps.append({
@@ -564,6 +562,9 @@ def run_chat(
     })
     total_ms = round((time.perf_counter() - request_started) * 1000)
     slowest = max(trace_steps, key=lambda item: item["durationMs"], default=None)
+    usage = usage_ledger.summary() or usage
+    if usage:
+        trace_steps.append({'kind':'usage','name':'Provider usage accounting','durationMs':0,'usage':usage})
     trace = {
         "requestId": request_id,
         "totalMs": total_ms,

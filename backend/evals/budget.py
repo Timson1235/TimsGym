@@ -38,8 +38,8 @@ class Limits:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be positive and finite.')
-        if self.max_input_tokens > 12000 or self.max_output_tokens > 1024:
-            raise ValueError('Small evals are capped at 12,000 input and 1,024 output tokens per request.')
+        if self.max_input_tokens > 24000 or self.max_output_tokens > 4096:
+            raise ValueError('Small evals are capped at 24,000 input and 4,096 output tokens per request; defaults remain 12,000/1,024.')
 
 
 class Budget:

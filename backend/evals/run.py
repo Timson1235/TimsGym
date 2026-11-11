@@ -263,11 +263,14 @@ def main(argv=None):
     parser.add_argument('--model', choices=list(PRICES), default='claude-sonnet-5-5')
     parser.add_argument('--max-cost', type=float, default=0.25)
     parser.add_argument('--max-case-cost', type=float, default=0.18)
+    parser.add_argument('--max-case-calls', type=int, choices=[6,9], default=6)
+    parser.add_argument('--max-input-tokens', type=int, choices=[12000,24000], default=12000)
+    parser.add_argument('--max-output-tokens', type=int, choices=[1024,4096], default=1024)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--baseline', type=Path, help='Previous report.json to compare.')
     args = parser.parse_args(argv)
     try:
-        limits = Limits(total_usd=args.max_cost, case_usd=args.max_case_cost)
+        limits = Limits(total_usd=args.max_cost, case_usd=args.max_case_cost, max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens, case_calls=args.max_case_calls)
         budget = Budget(args.model, limits)
     except ValueError as error:
         parser.error(str(error))

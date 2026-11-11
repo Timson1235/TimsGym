@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from .tool_registry import catalog
 
-PROMPT_VERSION = 'coach-v2.5-request-read-reuse'
+PROMPT_VERSION = 'coach-v2.6-structured-evidence'
 
 SHARED = """You are TimsGym AI, a fitness coach adapting to this user's goals, experience,
 preferences, available equipment and constraints. Reply in the language the user

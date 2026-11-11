@@ -159,10 +159,10 @@ class ContextSelectionTests(unittest.TestCase):
                 run_claude_agent(api_key='test', model='test', system_instruction='Do not ignore knee pain.',
                     messages=self.messages, tools=declarations, context_selection=enabled,
                     handle_tool=lambda name, args, key: calls.append((name, key)) or (
-                        f'{key}: ' + 'Recorded sets and notes. ' * 250 if name == 'batch_retrieve'
+                        json.dumps({'results':[{'success':True,'tool':'get_workout_details','result':{'id':key,'notes':'Recorded sets and notes. ' * 250}}]}) if name == 'batch_retrieve'
                         else 'Confirmed preview, not started.'))
             payloads[enabled] = [json.loads(call.args[0].data) for call in request.call_args_list]
-            self.assertEqual(len(calls), 7)
+            self.assertEqual(len(calls), 6)
             self.assertEqual(len(payloads[enabled]), 8)
             self.assertIn('Confirmed preview, not started.', json.dumps(payloads[enabled][-1]))
         before = sum(len(json.dumps(p)) for p in payloads[False])

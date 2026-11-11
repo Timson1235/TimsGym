@@ -102,7 +102,7 @@ TOOL_DECLARATIONS = [
                                     "version": {"type":"INTEGER", "description":"Schema version, always 1"},
                                     "strategy": {"type":"STRING", "enum":["double_progression","skill"]},
                                     "repMin": {"type":"INTEGER"}, "repMax": {"type":"INTEGER"},
-                                    "targetRir": {"type":"NUMBER"}, "weightIncrement": {"type":"NUMBER"},
+                                    "targetRir": {"type":"NUMBER"}, "weightIncrement": {"type":"NUMBER", "minimum":0.001, "maximum":100, "description":"Known positive equipment increment in kg (0.001 to 100). OMIT for bodyweight, skill-only progression or unknown increments. Never send 0."},
                                     "requiredSessions": {"type":"INTEGER", "description":"Comparable successful sessions before a weight/variation change; default 2."},
                                     "goal": {"type":"OBJECT", "properties": {
                                         "targetMovement":{"type":"STRING"}, "currentVariation":{"type":"STRING"},

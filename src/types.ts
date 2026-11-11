@@ -155,14 +155,17 @@ export interface AIChatSession {
 }
 
 export interface AIUsage {
-  provider: 'claude' | 'gemini';
+  provider: 'claude' | 'gemini' | 'mixed';
   model: string;
   inputTokens: number;
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
   totalTokens: number;
-  estimatedCostUsd: number;
+  estimatedCostUsd: number | null;
+  knownCostUsd?: number;
+  usageComplete?: boolean;
+  thinkingTokens?: number;
 }
 
 export interface AIUsagePeriod {
@@ -170,7 +173,10 @@ export interface AIUsagePeriod {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCostUsd: number;
+  estimatedCostUsd: number | null;
+  knownCostUsd?: number;
+  usageComplete?: boolean;
+  thinkingTokens?: number;
 }
 
 export interface AIUsageSummary {

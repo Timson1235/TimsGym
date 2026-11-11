@@ -1,5 +1,7 @@
 """Minimal Anthropic Messages client using only the Python standard library."""
 import json
+from http.client import IncompleteRead
+from itertools import chain
 from .pricing import estimate_claude_cost
 import logging
 import ssl
@@ -83,6 +85,13 @@ def _request_json(
         raise
 
 
+class IncompleteStream(RuntimeError):
+    def __init__(self, message, usage, diagnostics):
+        super().__init__(message)
+        self.partial_usage = deepcopy(usage)
+        self.diagnostics = diagnostics
+
+
 def _request_stream(request: Request, *, timeout_seconds: float, on_text: Callable[[str], None]) -> dict:
     """Reassemble complete Messages blocks; never execute partial tool JSON."""
     blocks: dict[int, dict] = {}
@@ -91,10 +100,14 @@ def _request_stream(request: Request, *, timeout_seconds: float, on_text: Callab
     stopped = False
     open_blocks = set()
     data_lines = []
+    event_counts = {}
+    request_id = None
     context = ssl.create_default_context(cafile=certifi.where() if certifi else None)
     try:
         with urlopen(request, timeout=timeout_seconds, context=context) as response:
-            for raw_line in response:
+            request_id = getattr(response, 'headers', {}).get('request-id')
+            # Flush a final SSE event even when the server omits its trailing blank line.
+            for raw_line in chain(response, [b'\n']):
                 line = raw_line.decode("utf-8").rstrip("\r\n")
                 if line.startswith("data:"):
                     data_lines.append(line[5:].lstrip(" "))
@@ -104,6 +117,7 @@ def _request_stream(request: Request, *, timeout_seconds: float, on_text: Callab
                 event = json.loads("\n".join(data_lines))
                 data_lines = []
                 kind = event.get("type")
+                event_counts[kind] = event_counts.get(kind, 0) + 1
                 if kind == "error":
                     raise RuntimeError("Claude stream error: " + str(event.get("error", {}).get("type", "unknown")))
                 if kind == "message_start":
@@ -144,8 +158,14 @@ def _request_stream(request: Request, *, timeout_seconds: float, on_text: Callab
     except HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Claude HTTP {error.code}: {body[:500]}") from error
+    except (TimeoutError, ConnectionError, IncompleteRead) as error:
+        raise IncompleteStream("Claude stream transport interrupted", result['usage'],
+            {'requestId': request_id, 'eventCounts': event_counts,
+             'transportError': type(error).__name__, 'openBlockIndexes': sorted(open_blocks)}) from error
     if not stopped or open_blocks:
-        raise RuntimeError("Claude stream ended before all blocks were completed")
+        raise IncompleteStream("Claude stream ended before all blocks were completed", result['usage'],
+            {'requestId':request_id,'eventCounts':event_counts,'messageStopped':stopped,
+             'openBlockIndexes':sorted(open_blocks),'stopReason':result.get('stop_reason')})
     if result.get("stop_reason") == "max_tokens":
         raise RuntimeError("Claude response was truncated; no tools were executed for this round")
     result["content"] = [blocks[index] for index in sorted(blocks)]
@@ -203,6 +223,7 @@ def run_claude_agent(
     prompt_caching: bool = True,
     get_tools: Callable[[], list[dict]] | None = None,
     max_output_tokens: int = 4096,
+    on_usage: Callable | None = None,
     context_selection: bool = False,
 ) -> dict:
     conversation = list(messages)
@@ -221,6 +242,10 @@ def run_claude_agent(
     }
     trace_steps = []
 
+    stream_retried = False
+    mutation_attempted = False
+    seen_read_results = set()
+    stalled_read_rounds = 0
     budget = RoundBudget()
     termination_reason = 'round_limit'
     for step in range(max_steps):
@@ -228,9 +253,20 @@ def run_claude_agent(
         if finalizing:
             conversation.append({'role': 'user', 'content': FINAL_RESPONSE_INSTRUCTION})
         current_tools = get_tools() if get_tools else tools
+        available_tools = list(current_tools)
         if selection and selection.tool_names is not None:
             current_tools = [tool for tool in current_tools
                              if tool['name'] in selection.tool_names or tool['name'] == 'discover_tools']
+        completion_round = (not finalizing and any(t['name'] == 'start_workout_session' for t in available_tools)
+                            and (budget.ordinary >= budget.ordinary_limit - 2 or stalled_read_rounds >= 2))
+        if completion_round:
+            current_tools = [t for t in available_tools if t['name'] == 'start_workout_session']
+            conversation.append({'role': 'user', 'content':
+                'Retrieval is now closed for this request. Use the available confirmed evidence '
+                'to create the requested workout preview now, if enough information is available. '
+                'For missing setup propose clearly labeled starting targets; never override a hold '
+                'or invent achieved performance. If essential information is missing, ask one '
+                'focused clarification instead. Do not claim a preview without tool success.'})
         offered = {tool['name'] for tool in current_tools}
         claude_tools = [{
             'name': tool['name'], 'description': tool.get('description', ''),
@@ -279,17 +315,38 @@ def run_claude_agent(
             model_span.progress({'streamedText':''.join(streamed_text)})
         model_started = time.perf_counter()
         request_error = None
+        accounted = False
         try:
             if on_event:
-                result = _request_stream(
-                    request, timeout_seconds=timeout_seconds,
-                    on_text=emit_text,
-                )
+                try:
+                    result = _request_stream(request, timeout_seconds=timeout_seconds, on_text=emit_text)
+                except IncompleteStream as error:
+                    if on_usage:
+                        on_usage(error.partial_usage, False)
+                    accounted = True
+                    tracing.event('stream_failure', 'Incomplete Claude stream', output=error.diagnostics)
+                    if stream_retried or mutation_attempted:
+                        raise
+                    stream_retried = True
+                    on_event({'type':'reset'})
+                    on_event({'type':'status','message':'Antwortübertragung unterbrochen; derselbe Schritt wird einmal wiederholt…'})
+                    retry_payload = dict(payload)
+                    retry_payload.pop('stream', None)
+                    retry_request = Request(request.full_url, data=json.dumps(retry_payload).encode(),
+                                            headers=dict(request.headers), method='POST')
+                    accounted = False
+                    with tracing.Span('provider_attempt', 'Claude non-stream recovery', retry_payload) as retry_span:
+                        result = _request_json(retry_request, timeout_seconds=timeout_seconds,
+                                               operation='stream_recovery', model=model, step=step+1)
+                        retry_span.output(result)
             else:
                 result = _request_json(
                     request, timeout_seconds=timeout_seconds,
                     operation="coach", model=model, step=step + 1,
                 )
+            if on_usage:
+                on_usage(result.get("usage", {}), True)
+            accounted = True
             model_span.output(result)
             if result.get("stop_reason") == "max_tokens":
                 raise RuntimeError("Claude response truncated; tool arguments were not executed")
@@ -299,6 +356,8 @@ def run_claude_agent(
             if (result.get("stop_reason") == "tool_use" and not has_tools) or not (has_tools or has_text):
                 raise RuntimeError("Claude returned no usable response; no tools were executed for this round")
         except Exception as error:
+            if on_usage and not accounted:
+                on_usage(getattr(error, "partial_usage", {}), False)
             request_error = type(error).__name__
             model_span.error(error)
             raise
@@ -353,6 +412,9 @@ def run_claude_agent(
 
         conversation.append({"role": "assistant", "content": content})
         tool_results = []
+        round_new_reads = 0
+        round_reads = 0
+        round_mutation = False
         for call in tool_calls:
             with tracing.parent_span(model_span.id):
                 name = call.get('name', '')
@@ -380,7 +442,26 @@ def run_claude_agent(
                     except (ValueError, TypeError, ValidationError) as error:
                         feedback = 'Context selection rejected; no tool executed: ' + str(error)
                     else:
+                        if name in REGISTRY and not REGISTRY[name].read_only:
+                            mutation_attempted = True
                         feedback = handle_tool(name, arguments, call.get('id', ''))
+                        if name in REGISTRY and not REGISTRY[name].read_only:
+                            round_mutation = True
+                            seen_read_results.clear()
+                        elif name != 'discover_tools':
+                            round_reads += 1
+                            try:
+                                data = json.loads(feedback)
+                                items = data.get('results', []) if name == 'batch_retrieve' else [{'success': True, 'tool':name, 'result':data}]
+                                for item in items:
+                                    if not item.get('success') or 'result' not in item:
+                                        continue
+                                    signature = json.dumps([item.get('tool'), item['result']], sort_keys=True)
+                                    if signature not in seen_read_results:
+                                        seen_read_results.add(signature)
+                                        round_new_reads += 1
+                            except (ValueError, TypeError, AttributeError):
+                                pass
                         if selection:
                             selection.apply(control)
                             if name == 'discover_tools' and selection.tool_names is not None:
@@ -392,6 +473,10 @@ def run_claude_agent(
                 "tool_use_id": call.get("id", ""),
                 "content": feedback,
             })
+        stalled_read_rounds = (stalled_read_rounds + 1 if round_reads and not round_new_reads and not round_mutation else 0)
+        trace_step['newReadResults'] = round_new_reads
+        trace_step['stalledReadRounds'] = stalled_read_rounds
+        trace_step['completionRound'] = completion_round
         conversation.append({"role": "user", "content": tool_results})
         if finalizing:
             break

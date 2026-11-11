@@ -1,9 +1,13 @@
 """Small synthetic fixtures and explicit behavioral assertions, not an LLM judge."""
 from copy import deepcopy
 
-FIXTURE_VERSION = 'edge-smoke-v2.1-leg-browse'
+FIXTURE_VERSION = 'edge-smoke-v2.2-large-workout'
 FIXED_NOW = '2026-10-23T12:00:00+02:00'
 CASES = {
+    'large_workout': {
+        'message': 'I have been away from the gym for a week. Create a full-body workout preview for about two hours, including jumps and handstand push-up practice. Cover all major muscle groups. Check progression for the exercises you select in a batch; use recorded baselines when setup is missing and label new starting estimates. Do not start the workout.',
+        'description': 'Large library and session with sixteen exercise histories, mixed missing setup/effort; complete a preview without losing batch evidence.',
+    },
     'leg_session_browse': {
         'message': 'Find my most recent legs-only workout by inspecting its exercises, not just the title. Browse lightweight summaries first, using pages of at most 3 sessions, and follow older pages if needed. Then retrieve the selected workout details and show its date, exercises, individual warm-up and working sets with weights/reps, reported RIR where known, and comments. Do not create or change a workout.',
         'description': 'Find a neutrally titled leg session beyond page one, reject newer upper/full-body/draft sessions, then report original sets and effort.',
@@ -90,8 +94,25 @@ def fixture(case):
     library = deepcopy(LIBRARY)
     if case == 'leg_session_browse':
         library.append({'id': 'rdl', 'name': 'Romanian Deadlift', 'category': 'Legs', 'equipment': 'Barbell'})
+    if case == 'large_workout':
+        extras = [('rdl','Romanian Deadlift','Legs'),('lat','Lat Pulldown','Back'),
+                  ('incline','Incline Bench Press','Chest'),('dips','Dips','Chest'),
+                  ('box','Box Jumps','Legs'),('cmj','Countermovement Jumps','Legs'),
+                  ('negative','Wall Handstand Push-up Negative','Shoulders'),('pike','Pike Push-up','Shoulders'),
+                  ('calf','Calf Raise','Legs'),('curl','Biceps Curl','Arms'),
+                  ('triceps','Triceps Pushdown','Arms'),('core','Dead Bug','Core')]
+        library += [{'id':i,'name':n,'category':c,'equipment':'Gym'} for i,n,c in extras]
+        exercises=[]
+        for i,ex in enumerate(library):
+            data=entry('squat',0 if ex['id'] in {'box','cmj','negative','pike','core','dips'} else 20, count=3, effort=None)
+            data.update(exerciseId=ex['id'],exerciseName=ex['name'],category=ex['category'])
+            for j,item in enumerate(data['sets']): item['id']=f"{ex['id']}-{j}"
+            if i % 2: data.pop('progression',None)
+            exercises.append(data)
+        workouts=[{'id':'large-reference','title':'Full body with jumps and handstand practice',
+                   'date':'2026-10-15','isCompleted':True,'exercises':exercises}]
     return {'profile': {'name': 'Synthetic athlete', 'preferredUnit': 'kg', 'experienceLevel': 'Intermediate',
-                        'primaryGoal': 'General Fitness', 'personalMemories': ['Prefers sessions under 45 minutes.']},
+                        'primaryGoal': 'General Fitness', 'personalMemories': ([] if case == 'large_workout' else ['Prefers sessions under 45 minutes.'])},
             'exercises': library, 'workouts': workouts}, active
 
 
@@ -101,7 +122,16 @@ def assertions(case, result, before, reads):
     reply = result.get('reply', '').lower()
     checks = {'completed': result.get('trace', {}).get('terminationReason') == 'completed',
               'nonempty_reply': bool(reply.strip())}
-    if case == 'leg_session_browse':
+    if case == 'large_workout':
+        proposals=[a['data'] for a in actions if a.get('type')=='workout_proposed']
+        exercises=proposals[-1].get('exercises',[]) if proposals else []
+        ids={e.get('exerciseId') for e in exercises}
+        checks.update(preview_created=bool(proposals), only_preview=bool(actions) and all(a.get('type')=='workout_proposed' for a in actions),
+                      broad_plan=len(ids)>=8, includes_jumps=bool(ids & {'box','cmj'}), includes_handstand_preparation=bool(ids & {'negative','pike'}),
+                      progression_checked=all(any(r['tool']=='suggest_weight' and r.get('result',{}).get('exerciseId')==i for r in reads) for i in ids),
+                      no_invented_actuals=bool(exercises) and all(not st.get('completed') and st.get('rpe') is None for e in exercises for st in e.get('sets',[])),
+                      not_started=bool(proposals) and not proposals[-1].get('isCompleted'))
+    elif case == 'leg_session_browse':
         browsed = [item for item in reads if item['tool'] == 'get_session_summary']
         detailed = [item for item in reads if item['tool'] == 'get_workout_details'
                     and item.get('result', {}).get('workout', {}).get('id') == 'leg-reference']
