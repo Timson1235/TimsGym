@@ -54,6 +54,36 @@ class CoachToolSelectionTests(unittest.TestCase):
         self.assertEqual(len(result["actionsExecuted"]), 1)
         self.assertEqual(result["actionsExecuted"][0]["type"], "set_logged")
 
+    def test_empty_provider_response_falls_back_before_any_mutation(self):
+        agent = coach.run_claude_agent
+        response = SimpleNamespace(function_calls=[], text='Fallback reply', usage_metadata=None)
+        with patch('app.agent.claude_provider._request_json', return_value={
+                'content': [], 'stop_reason': 'tool_use'}), \
+                patch.object(coach, '_client', object()), \
+                patch.object(coach, '_generate_with_retry', return_value=response) as fallback:
+            result = self.run_chat('Check my progression', [], agent)
+        fallback.assert_called_once()
+        self.assertEqual(result['reply'], 'Fallback reply')
+        self.assertEqual(result['trace']['providerFallback']['reason'], 'provider_error')
+        self.assertEqual(result['actionsExecuted'], [])
+
+    def test_empty_provider_response_after_mutation_does_not_replay_tools(self):
+        agent = coach.run_claude_agent
+        workout = {'id': 'active', 'exercises': []}
+        with patch('app.agent.claude_provider._request_json', side_effect=[
+                {'content': [{'type': 'tool_use', 'id': 'log', 'name': 'log_set',
+                    'input': {'exercise_name': 'Barbell Back Squat', 'weight': 65,
+                              'reps': 5, 'set_type': 'working'}}], 'stop_reason': 'tool_use'},
+                {'content': [], 'stop_reason': 'tool_use'},
+                ]), patch.object(coach, '_client', object()), \
+                patch.object(coach, '_generate_with_retry') as fallback:
+            result = self.run_chat('65 mal 5', [], agent, workout)
+        fallback.assert_not_called()
+        self.assertEqual(len(result['actionsExecuted']), 1)
+        self.assertEqual(result['actionsExecuted'][0]['type'], 'set_logged')
+        self.assertEqual(len(result['activeWorkoutState']['exercises'][0]['sets']), 1)
+        self.assertIn('Bitte prüfe', result['reply'])
+
     def test_logged_set_is_returned_to_workout_ui_without_inventing_rpe(self):
         workout = {"id": "active", "exercises": []}
 

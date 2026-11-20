@@ -1,4 +1,5 @@
 export type ChatStreamEvent =
+  | { type: 'ready'; requestId: string }
   | { type: 'delta'; text: string }
   | { type: 'status'; message: string }
   | { type: 'reset' }

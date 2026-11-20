@@ -47,7 +47,7 @@ def write_ai_request_metric(
         input_tokens=usage.get("inputTokens", 0),
         output_tokens=usage.get("outputTokens", 0),
         total_tokens=usage.get("totalTokens", 0),
-        estimated_cost_usd=usage.get("estimatedCostUsd", 0.0),
+        estimated_cost_usd=usage.get("estimatedCostUsd") if usage.get("estimatedCostUsd") is not None else usage.get("knownCostUsd", 0.0),
         tools_used=tools_used or [],
         steps=trace.get("steps", []),
         error_type=error_type,
@@ -93,12 +93,20 @@ def read_user_usage_summary(session: Session, *, user_id: int) -> dict:
     now = datetime.now(timezone.utc)
 
     def summarize(items: list[AIRequestMetric]) -> dict:
+        unknown = sum(1 for item in items if any(
+            step.get('kind') == 'usage' and step.get('usage', {}).get('estimatedCostUsd') is None
+            for step in (item.steps or [])) or (
+                item.provider == 'gemini' and not item.estimated_cost_usd
+                and not any(step.get('kind') == 'usage' for step in (item.steps or []))))
+        known = round(sum(item.estimated_cost_usd or 0 for item in items), 8)
         return {
             "requests": len(items),
+            "unknownCostRequests": unknown,
+            "knownCostUsd": known,
             "inputTokens": sum(item.input_tokens or 0 for item in items),
             "outputTokens": sum(item.output_tokens or 0 for item in items),
             "totalTokens": sum(item.total_tokens or 0 for item in items),
-            "estimatedCostUsd": round(sum(item.estimated_cost_usd or 0 for item in items), 8),
+            "estimatedCostUsd": None if unknown else known,
         }
 
     this_month = [

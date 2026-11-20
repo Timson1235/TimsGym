@@ -102,7 +102,10 @@ class RequestCacheWorkflowTests(unittest.TestCase):
         return json.loads(payload['contents'][-1]['parts'][0]['function_response']['response']['result'])
 
     def run_loop(self, *args, **kwargs):
-        return workflow.ProviderDiscoveryTests.run_loop(self, *args, **kwargs)
+        from app.agent import coach
+        # These regressions exercise the legacy reference-based feedback path.
+        with patch.object(coach.settings, 'CLAUDE_CONTEXT_SELECTION', False):
+            return workflow.ProviderDiscoveryTests.run_loop(self, *args, **kwargs)
 
     def test_direct_and_batch_reads_share_results_on_both_providers(self):
         for provider in ['claude', 'gemini']:

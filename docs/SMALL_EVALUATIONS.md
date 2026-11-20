@@ -164,3 +164,20 @@ automatically. Its checks inspect actual retrieval results, arguments and order,
 not just a plausible final answer. Wording checks still need manual review.
 The fixture/catalog version is now `edge-smoke-v2.1-leg-browse`; historical reports
 remain unchanged, and baseline comparisons flag the different fixture version.
+
+## Large-workout compaction regression (November 11)
+
+`large_workout` uses a synthetic sixteen-exercise session with mixed missing
+setup and unknown effort, requesting a full-body preview with jumps and handstand
+preparation. It is opt-in, not added to the default paid suite:
+
+```bash
+.venv/bin/python -m evals.run --live --model claude-haiku-5-5 --case large_workout --max-cost .03 --max-input-tokens 24000 --max-output-tokens 4096 --max-case-calls 9
+```
+
+Defaults remain 12,000 input / 1,024 output tokens. The explicit larger allowances
+support a complete multi-exercise preview; the same preflight reservations and
+run/case dollar limits still apply. Configuration differences are retained in
+report provenance; do not compare different allowances as controlled measurements.
+Automated checks cover preview creation, coverage, progression reads and separation
+of planned/actual values. They do not establish scientific prescription quality.

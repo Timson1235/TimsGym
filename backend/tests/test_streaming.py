@@ -63,7 +63,8 @@ class ProviderStreamingTests(unittest.TestCase):
             handler = Mock()
             data = [event('content_block_start', index=0, content_block={'type':'tool_use','id':'call','name':'log_set','input':{}}),
                     event('content_block_delta', index=0, delta={'type':'input_json_delta','partial_json':'{"weight":'})] + ending
-            with patch('app.agent.claude_provider.urlopen', return_value=StreamResponse(data)):
+            with patch('app.agent.claude_provider.urlopen', return_value=StreamResponse(data)), patch(
+                'app.agent.claude_provider._request_json', side_effect=RuntimeError('Recovery unavailable')):
                 with self.assertRaises((RuntimeError, ValueError)):
                     run_claude_agent(api_key='test', model='test', system_instruction='Rules', messages=[],
                                      tools=TOOL_DECLARATIONS, handle_tool=handler, on_event=lambda e: None)

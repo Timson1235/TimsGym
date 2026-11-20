@@ -56,7 +56,8 @@ launch scripts and Dockerfile.
    There is no shared cross-user or cross-request result cache.
 6. Tool results feed subsequent model rounds. Keep references resolvable if
    changing context retention. Do not remove prior results without preserving
-   the evidence they contain. Full round compaction is not implemented.
+   the evidence they contain. The experimental Claude context-selection branch
+   supports reversible read-result compaction; see [context selection](CONTEXT_SELECTION.md).
 7. Streaming updates the client. Actions and final state are returned through
    the existing chat contract. A workout preview is not a started or saved
    completed workout. Never replay on another provider after a mutation attempt.
@@ -104,13 +105,19 @@ and one repetition prevent causal claims about small differences. Do not read
 real private conversation/trace payloads without user authorization; use the
 synthetic evaluation traces for agent debugging.
 
-Known unresolved finding at this handover: the request-read-reuse live evaluation
+Historical unresolved provider finding: the request-read-reuse live evaluation
 passed logging clarification and repeat/adapt, but the missing-effort case twice
 produced reconstructed `content=[]` with `stop_reason=tool_use` before tools ran.
 The cause is not established. All 149 backend tests passed at that point. These
 live cases had no cache hits, so they do not establish deduplication savings.
 Local ignored results are under `backend/evals/results/`; they may not exist in
-a fresh clone. Resolve this finding before accepting more context compaction.
+a fresh clone. November 4 hardening now rejects empty/contradictory Claude
+responses as provider failures, permitting configured fallback only before a
+mutation attempt. This prevents silent empty completion but does not establish
+the original provider/parser cause or retroactively pass those live cases.
+Progression also retains completed sessions with entirely skipped working sets
+instead of selecting older successes. Regression tests cover both behaviors.
+Resolve the live-provider finding before accepting more context compaction.
 
 ## Documentation index
 
@@ -126,9 +133,42 @@ a fresh clone. Resolve this finding before accepting more context compaction.
 - [Private-account access](PRIVATE_ACCESS.md)
 - [Budgeted evaluations](SMALL_EVALUATIONS.md)
 - [Next implementations](NEXT_IMPLEMENTATIONS.md) — planned items are not shipped.
+- [November 4 merge verification](MERGE_VERIFICATION.md) — fixes, checks and live-evaluation limitations.
 - [Historical migration plan](FASTAPI_MIGRATION_PLAN.md)
 
 When changing behavior, update its focused document and any prompt snapshot it
 changes. Show the user clickable changed paths and relevant snippets/diffs.
 Leave an explicit note about unresolved checks rather than presenting assumptions
 as tested behavior. Do not add generated-by or AI co-author attribution to commits.
+
+## Coaching model (November 11, 2026)
+
+The default coach is now `claude-haiku-5-5` for lower inference cost. Configure
+`CLAUDE_MODEL` to override it. `agent/pricing.py` calculates model-specific
+estimates per provider round, including Haiku's over-100,000-input-token tier;
+unknown models return an unknown estimate. Background Claude summaries use the
+same pricing helper. Structured batch compaction and preview-round reservation now address the
+large-workout failure; see CONTEXT_SELECTION.md for retained evidence, soft
+budget overflow, tests and limitations.
+The evaluation runner retains its explicit model flag; select Haiku when testing
+this production default.
+
+## Stream recovery and usage accounting (local changes, November 11)
+
+Claude flushes a final SSE event at EOF and retries an incomplete stream once as
+non-streaming generation with the same conversation. Completed tools are not replayed;
+recovery is prohibited after any mutation attempt. Partial tool arguments never execute.
+Private traces record stream event counts, request ID and recovery attempts. A provider
+fallback may still be necessary if recovery fails; network failures are not eliminated.
+
+`agent/usage.py` aggregates provider attempts across fallback, includes Gemini thinking
+tokens, and marks incomplete usage as a lower bound. Missing costs are null, not zero;
+known portions remain available. The metric's existing JSON steps retain completeness
+without a database migration. Legacy Gemini zero estimates are unknown in summaries.
+Set `GEMINI_BILLING_TIER=free` only after checking the API project's tier in AI Studio;
+`unknown` is the default, `paid` uses the supported model's dated price schedule.
+This setting only controls estimates and does not change provider billing. A Google
+consumer subscription is not proof of the API project's billing tier. See
+https://aistudio.google.com/docs/billing and https://aistudio.google.com/docs/pricing.
+Workout preview schemas require positive weight increments; bodyweight/unknown
+increments must be omitted, matching the progression validator.

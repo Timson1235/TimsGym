@@ -102,7 +102,7 @@ TOOL_DECLARATIONS = [
                                     "version": {"type":"INTEGER", "description":"Schema version, always 1"},
                                     "strategy": {"type":"STRING", "enum":["double_progression","skill"]},
                                     "repMin": {"type":"INTEGER"}, "repMax": {"type":"INTEGER"},
-                                    "targetRir": {"type":"NUMBER"}, "weightIncrement": {"type":"NUMBER"},
+                                    "targetRir": {"type":"NUMBER"}, "weightIncrement": {"type":"NUMBER", "minimum":0.001, "maximum":100, "description":"Known positive equipment increment in kg (0.001 to 100). OMIT for bodyweight, skill-only progression or unknown increments. Never send 0."},
                                     "requiredSessions": {"type":"INTEGER", "description":"Comparable successful sessions before a weight/variation change; default 2."},
                                     "goal": {"type":"OBJECT", "properties": {
                                         "targetMovement":{"type":"STRING"}, "currentVariation":{"type":"STRING"},
@@ -277,7 +277,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "suggest_weight",
-        "description": "Retrieve a compact deterministic progression recommendation from actual completed sets versus preserved plan values. Searches up to three comparable sessions for the canonical exercise. Returns evidence, reason and proposed next targets; never changes a plan. Use instead of inventing percentages from one set. Missing plans, effort or equipment increments are explicitly reported.",
+        "description": "Retrieve a compact deterministic progression recommendation from actual completed sets versus preserved plan values. Searches up to three comparable sessions for the canonical exercise. Returns evidence, reason, proposed next targets and lastPerformance (latest recorded actual sets, even when setup is missing); never changes a plan. Do not fetch separate history for the same latest values. Use instead of inventing percentages from one set. Missing plans, effort or equipment increments are explicitly reported.",
         "parameters": {"type":"OBJECT", "properties": {
             "exercise_id":{"type":"STRING", "description":"Permanent exercise ID, preferred."},
             "exercise_name":{"type":"STRING", "description":"Canonical name or unambiguous alias if ID unknown."},
@@ -804,7 +804,14 @@ def handle_resolve_flag(session: Session, user_id: int, db: dict, args: dict, **
 
 
 def handle_suggest_weight(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
-    return recommend_progression(db, exercise_id=args.get("exercise_id"), exercise_name=args.get("exercise_name", ""))
+    result = recommend_progression(db, exercise_id=args.get("exercise_id"), exercise_name=args.get("exercise_name", ""))
+    # Setup can be missing while useful historical outcomes still exist. Return
+    # those in this read instead of forcing another model round for the baseline.
+    history = handle_get_exercise_history(session, user_id, db, {
+        'exercise_id': args.get('exercise_id'),
+        'exercise_name': args.get('exercise_name', ''), 'limit': 1})
+    result['lastPerformance'] = history
+    return result
 
 
 def handle_save_personal_memory(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:

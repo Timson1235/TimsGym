@@ -1,5 +1,6 @@
 """Typed configuration, loaded from the project's .env (one level up)."""
 from urllib.parse import quote_plus
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,10 +18,12 @@ class Settings(BaseSettings):
     APP_ALLOWED_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
     TRACE_ADMIN_UID: str = "30GTsmJWxpSVCSNwONCmz26dGE53"
     CLAUDE_API_KEY: str = ""
-    CLAUDE_MODEL: str = "claude-sonnet-5-5"
+    CLAUDE_MODEL: str = "claude-haiku-5-5"
     CLAUDE_PROMPT_CACHING: bool = True
+    CLAUDE_CONTEXT_SELECTION: bool = True
     CLAUDE_TIMEOUT_SECONDS: float = 45.0
     GEMINI_API_KEY: str = ""
+    GEMINI_BILLING_TIER: Literal["unknown", "free", "paid"] = "unknown"
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.7-flash"
     GEMINI_LAST_RESORT_MODEL: str = "gemini-2.5-flash"

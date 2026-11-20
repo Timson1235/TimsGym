@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlmodel import Session
 
 from ..agent import coach
-from .. import tracing
+from .. import tracing, chat_control
 from ..agent.progression import recommend_progression, workout_review
 from ..auth import current_user, trace_admin
 from ..db import get_session
@@ -91,17 +91,17 @@ def remove_chat_session(
     return {"success": True}
 
 
-def _execute_chat(payload: dict, user: User, session: Session, on_event=None):
+def _execute_chat(payload: dict, user: User, session: Session, on_event=None, is_cancelled=None):
     request_id = str(uuid.uuid4())
     thread_id = str(payload.get("threadId") or user.id)
     with tracing.request_trace(session.get_bind(), request_id, user.id, thread_id):
         with tracing.Span('request', 'Coach request', payload) as span:
-            result = _execute_chat_body(payload, user, session, request_id, on_event)
+            result = _execute_chat_body(payload, user, session, request_id, on_event, is_cancelled)
             span.output({key: value for key,value in result.items() if key != 'db'})
             return result
 
 
-def _execute_chat_body(payload: dict, user: User, session: Session, request_id: str, on_event=None):
+def _execute_chat_body(payload: dict, user: User, session: Session, request_id: str, on_event=None, is_cancelled=None):
     request_started = time.perf_counter()
     memory.ensure_default_chat_session(session, user.id)
     thread_id = str(payload.get("threadId") or user.id)
@@ -116,6 +116,7 @@ def _execute_chat_body(payload: dict, user: User, session: Session, request_id: 
             request_id=request_id,
             thread_id=thread_id,
             on_event=on_event,
+            is_cancelled=is_cancelled,
         )
     except Exception as error:
         session.rollback()
@@ -170,15 +171,33 @@ def chat(
     bind = session.get_bind()
     identity = User(id=user.id, uid=user.uid, email=user.email)
     session.rollback()  # Release the validation connection while the worker runs.
+    client_id = payload.get('clientRequestId') or str(uuid.uuid4())
+    if not isinstance(client_id, str) or len(client_id) > 100 or not client_id.strip():
+        raise HTTPException(status_code=422, detail='Invalid request identifier')
+    try:
+        control = chat_control.register(client_id, user.id, thread_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
     def work(emit):
-        with Session(bind) as worker_session:
-            return _execute_chat(payload, identity, worker_session, emit)
+        try:
+            emit({'type': 'ready', 'requestId': client_id})
+            with Session(bind) as worker_session:
+                return _execute_chat(payload, identity, worker_session, emit, control.stopped.is_set)
+        finally:
+            chat_control.release(client_id, control)
 
     return StreamingResponse(
         stream_events(work), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post('/chat/{request_id}/interrupt')
+def interrupt_chat(request_id: str, user: User = Depends(current_user)):
+    if not chat_control.interrupt(request_id, user.id):
+        raise HTTPException(status_code=404, detail='No running request found')
+    return {'interrupted': True}
 
 
 @router.patch("/metrics/roundtrip")
