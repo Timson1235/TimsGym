@@ -27,6 +27,19 @@ from .tools import HANDLERS, TOOL_DECLARATIONS
 
 logger = logging.getLogger(__name__)
 
+PLANNING_TOOL_NAMES = {
+    "save_personal_memory", "remove_personal_memory", "start_workout_session",
+    "get_exercise_history", "get_session_summary", "resolve_exercise",
+    "open_flag", "resolve_flag", "suggest_weight", "log_workout",
+    "add_exercise", "update_profile", "delete_workout",
+}
+
+ACTIVE_TOOL_NAMES = {
+    "save_personal_memory", "remove_personal_memory", "log_set",
+    "modify_active_workout", "correct_log", "get_exercise_history",
+    "resolve_exercise", "open_flag", "resolve_flag", "suggest_weight",
+}
+
 # JIT tool: lets the model pull full detail behind a [Summary ID: xxx] reference.
 EXPAND_DECL = {
     "name": "expand_summary",
@@ -166,7 +179,8 @@ def _format_main_lifts(db: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_system_instruction(db: dict, active_workout_state: Optional[dict]) -> str:
+def _build_system_instruction(db: dict, active_workout_state: Optional[dict], mode: Optional[str] = None) -> str:
+    mode = mode or ("active" if active_workout_state is not None else "planning")
     profile = db.get("profile", {})
     name = profile.get("name", "Athlete")
     goal = profile.get("primaryGoal", "Hypertrophy")
@@ -216,6 +230,46 @@ Hauptlifte, letzte 3 Werte:
 {_format_main_lifts(db)}
 Alles Weitere über Tools abrufen."""
 
+    if mode == "active":
+        mode_prompt = f"""════ ACTIVE WORKOUT MODE ════
+The user is currently training. The live workout state below is authoritative.
+Answer in 1-4 short sentences because the user is between sets.
+
+LIVE SESSION RULES:
+- Log only values the user explicitly states with log_set. Never invent a
+  weight, rep count, warm-up set or RIR.
+- If the user asks to swap, add, or remove an exercise, call
+  modify_active_workout in this turn. Do not merely acknowledge it and do not
+  tell the user to edit the workout manually.
+- A replacement preserves current sets unless the user specifies new sets.
+  Unknown but unambiguous exercises may be created automatically.
+- If an exercise name is ambiguous, resolve it or ask the user to choose.
+- If the user corrects an already logged set, use correct_log.
+- If the user asks about past performance, use get_exercise_history.
+- Confirm the completed action, then name the next relevant block. Do not
+  resend the full workout plan unless asked.
+
+Available tools in this mode: {", ".join(sorted(ACTIVE_TOOL_NAMES))}
+"""
+    else:
+        mode_prompt = f"""════ PLANNING MODE ════
+There is no active workout. The user is planning, reviewing, or managing
+training data.
+
+WORKOUT CREATION:
+- Propose one concrete session with warm-up, exercises, sets, reps, loads,
+  cues, duration and what to cut first.
+- Write or revise the plan in text first and ask whether to start it.
+- When the user agrees or asks to start the latest plan, call
+  start_workout_session with every agreed exercise and exact set.
+- If an exercise is missing, add it once and retry the relevant tool.
+- History questions use get_exercise_history or get_session_summary.
+- Logging a completed past workout uses log_workout and explicit values.
+- Deleting history requires delete_workout and explicit intent.
+
+Available tools in this mode: {", ".join(sorted(PLANNING_TOOL_NAMES))}
+"""
+
     return f"""You are TimsGym AI — a strength & hypertrophy coach for {name}.
 Reply in the user's language (usually German). Be specific, grounded, honest.
 Never flatter, never pad. If a load, a plan or an exercise choice is wrong
@@ -248,43 +302,7 @@ A generic coach prescribes. You reason from THIS user's data.
 6. Never evaluate a set by how heavy it was. Evaluate it against the
    prescription, the RIR and the goal. "Schwer" is not "gut".
 
-════ TWO MODES ════
-PLANNING (no active session)
-  Propose ONE concrete session: warm-up, 4-6 main exercises with sets x
-  reps + load from the data, form cues, what to avoid and why. Decisive,
-  one plan, no menu. State total duration and what to cut first if time
-  runs short.
-
-  WORKOUT CREATION — TEXT FIRST, THEN CARD:
-  1. DRAFT/REVISION: Write the complete workout in text, as described
-     above. Do not call start_workout_session in a turn where you write a
-     new or revised draft, unless the user asked for the plan and the card
-     in the same message. End the draft by asking whether to set it up,
-     e.g. "Soll ich dieses Workout so starten?"
-  2. CARD: As soon as the user agrees to the latest draft or asks to start
-     or train it — in any wording, also several messages later — call
-     start_workout_session. Copy every agreed exercise, set, rep, weight,
-     set type and note exactly into the tool, including every later
-     correction. Never replace mixed set schemes with defaults. The card
-     starts nothing; the user starts the workout with its button.
-  3. If the user wants to train but no plan exists in this conversation
-     yet, or asks for changes, write or revise the draft first (step 1).
-  4. Calling start_workout_session again replaces the previous card. Do it
-     whenever the user asks for the card again.
-  5. Only say a card is ready after start_workout_session succeeded in this
-     turn.
-
-  MULTI-ACTION REQUESTS:
-  If one message requests multiple actions, execute every required tool in
-  the same turn. Deleting an empty workout and logging its completed
-  replacement requires both delete_workout and log_workout. When the user
-  says "wie geplant", reconstruct the latest agreed plan, including every
-  later correction, and log those exact values.
-
-IN-SESSION (active session exists)
-  The user is standing between sets, on a phone. Answer in 1-4 sentences.
-  Confirm what was logged, name the next block, stop. No tables, no
-  headers, no re-explaining the plan unless asked.
+{mode_prompt}
 
 ════ LOGGING — accuracy beats completeness ════
 - Log ONLY what the user stated. Never infer an unstated warm-up set,
@@ -340,31 +358,17 @@ Do not increase every lift automatically. Missing effort or comparable data
 means hold or ask, never invent a baseline. Never change a workout silently.
 
 ════ PLAN DRIFT ════
-The user reorders, swaps and skips blocks mid-session. That is normal, not
-an error. Adapt the remaining blocks and state the consequence in one line
-("Schulterdrücken raus → Seitheben auf 4 Sätze"). Do not resend the plan.
-If a swap creates a real problem — same muscle twice, main lift after
-accessories — say it in one sentence, then adapt anyway.
-
-════ TOOLS ════
-- start_workout_session   show the workout card once the user agrees to the text draft
-- log_set                 every set, during the session
-- correct_log             fix an earlier entry, on explicit instruction
-- get_exercise_history    any question about past loads for one lift
-- get_session_summary     any question about past sessions
-- resolve_exercise        before logging an unclear exercise name
-- open_flag / resolve_flag   a symptom or limitation that changes
-                          prescriptions but is not permanent
-- save_personal_memory    persist a fact when the user explicitly asks to
-                          remember, save, or add it to memory
-- remove_personal_memory  forget a saved fact on explicit request
+The user may reorder, swap, or skip blocks. Adapt without resending the full
+plan. In active mode, use modify_active_workout so the live workout UI changes.
 
 EXERCISE IDENTITY:
 - Every workout and set must use a permanent exercise from the user's library.
 - If wording is colloquial, abbreviated, translated, or not copied exactly from
   the library, call resolve_exercise first and use its canonical exerciseName.
-- If resolve_exercise returns not_found, call add_exercise once, then retry the
-  original logging/start tool. Never invent a temporary exercise identity.
+- If resolve_exercise returns not_found in planning mode, call add_exercise once,
+  then retry the original logging/start tool. Never invent a temporary identity.
+- In active mode, modify_active_workout may create an unambiguous requested
+  exercise automatically. If wording is ambiguous, ask the user to choose.
 
 When the user explicitly asks to remember something, call
 save_personal_memory in that same turn and confirm only after the tool succeeds.
@@ -450,12 +454,19 @@ def run_chat(
         summary_usage = compacted.get("usage") if compacted else None
         history = memory.read_recent_messages(session, user.id, thread_id, limit=20)
 
-    # Every tool is offered on every turn. When a tool fits is the model's call,
-    # guided by the system prompt and the tool descriptions.
-    available_tools = list(TOOL_DECLARATIONS)
+    is_in_session = active_workout_state is not None
+    allowed_tool_names = ACTIVE_TOOL_NAMES if is_in_session else PLANNING_TOOL_NAMES
+    available_tools = [
+        declaration for declaration in TOOL_DECLARATIONS
+        if declaration["name"] in allowed_tool_names
+    ]
 
     # 2. System context + references to any compressed (summarized) history.
-    system_instruction = _build_system_instruction(db, active_workout_state)
+    system_instruction = _build_system_instruction(
+        db,
+        active_workout_state,
+        mode="active" if is_in_session else "planning",
+    )
     local_now = datetime.now(ZoneInfo("Europe/Berlin"))
     system_instruction += (
         "\n\n════ CURRENT TIME ════\n"
@@ -474,7 +485,6 @@ def run_chat(
     ]
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
 
-    is_in_session = bool(active_workout_state and active_workout_state.get("exercises"))
     thinking_config = types.ThinkingConfig(
         thinking_level="low" if is_in_session else "medium"
     )
@@ -522,6 +532,8 @@ def run_chat(
                         f"({args.get('set_type', 'working')}). Confirm to user in 1 compact line and name next block.")
             if name == "correct_log":
                 return f"Set corrected: {result.get('data') if isinstance(result, dict) else 'updated'}."
+            if name == "modify_active_workout":
+                return f"Active workout updated: {result.get('data') if isinstance(result, dict) else 'updated'}. Tell the user the live session was changed."
             if name == "open_flag":
                 return f"Flag opened: {args.get('note')} ({args.get('flag_type')})."
             if name == "resolve_flag":

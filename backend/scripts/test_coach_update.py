@@ -50,7 +50,7 @@ def test_prompt_generation():
         assert "Hauptlifte, letzte 3 Werte:" in prompt_planning
         assert "Alles Weitere über Tools abrufen." in prompt_planning
         assert "════ THE BAR ════" in prompt_planning
-        assert "════ TWO MODES ════" in prompt_planning
+        assert "════ PLANNING MODE ════" in prompt_planning
         print("  Passed: Planning mode prompt contains all required sections.")
 
         # B) In-session mode
@@ -71,6 +71,7 @@ def test_prompt_generation():
         prompt_session = coach._build_system_instruction(db, active_session)
         assert "Aktive Session: 2/2, erledigt: [Bankdrücken], offen: [Schulterdrücken]" in prompt_session
         assert "Zuletzt geloggt: Bankdrücken 70x6 (working, RIR 2.0)" in prompt_session
+        assert "════ ACTIVE WORKOUT MODE ════" in prompt_session
         print("  Passed: In-session mode prompt correctly formats active blocks and last logged set.")
 
 

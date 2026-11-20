@@ -72,8 +72,28 @@ class CoachToolSelectionTests(unittest.TestCase):
         )
 
         self.assertIn("start_workout_session", offered["tools"])
-        self.assertEqual(len(offered["tools"]), len(coach.TOOL_DECLARATIONS))
+        self.assertEqual(set(offered["tools"]), coach.PLANNING_TOOL_NAMES)
         self.assertNotIn("force_tool_name", offered["kwargs"])
+        self.assertEqual(result["trace"]["toolsOffered"], offered["tools"])
+
+    def test_active_workout_gets_only_session_tools(self):
+        offered = {}
+
+        def fake_agent(**kwargs):
+            offered["tools"] = [tool["name"] for tool in kwargs["tools"]]
+            offered["system"] = kwargs["system_instruction"]
+            return {"text": "Bereit.", "usage": None}
+
+        result = self.run_chat(
+            "Was steht als Nächstes an?",
+            [],
+            fake_agent,
+            {"id": "active", "exercises": []},
+        )
+
+        self.assertEqual(set(offered["tools"]), coach.ACTIVE_TOOL_NAMES)
+        self.assertNotIn("start_workout_session", offered["tools"])
+        self.assertIn("ACTIVE WORKOUT MODE", offered["system"])
         self.assertEqual(result["trace"]["toolsOffered"], offered["tools"])
 
     def test_question_mentioning_workout_start_keeps_the_model_reply(self):

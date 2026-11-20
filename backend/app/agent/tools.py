@@ -132,6 +132,47 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "modify_active_workout",
+        "description": "Modify the currently active workout when the user explicitly asks to add, replace, swap, or remove an exercise. This changes the live session shown in the workout UI; it does not log a completed workout.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "operation": {
+                    "type": "STRING",
+                    "enum": ["add_exercise", "replace_exercise", "remove_exercise"],
+                    "description": "The requested live-session change.",
+                },
+                "current_exercise": {
+                    "type": "STRING",
+                    "description": "The exercise currently in the session, required for replace/remove.",
+                },
+                "new_exercise": {
+                    "type": "STRING",
+                    "description": "The exercise to add or use as the replacement.",
+                },
+                "category": {"type": "STRING", "description": "Category for a genuinely new exercise."},
+                "equipment": {"type": "STRING", "description": "Equipment for a genuinely new exercise."},
+                "notes": {"type": "STRING", "description": "Optional exercise-specific note."},
+                "sets": {
+                    "type": "ARRAY",
+                    "description": "Optional explicit sets for the added/replacement exercise. If omitted while replacing, preserve the current sets.",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "weight": {"type": "NUMBER"},
+                            "reps": {"type": "INTEGER"},
+                            "setType": {"type": "STRING", "enum": ["warmup", "working", "drop", "failure"]},
+                            "rir": {"type": "NUMBER"},
+                            "notes": {"type": "STRING"},
+                        },
+                        "required": ["weight", "reps"],
+                    },
+                },
+            },
+            "required": ["operation"],
+        },
+    },
+    {
         "name": "correct_log",
         "description": "Fix an earlier logged entry upon explicit instruction from the user. Overwrites the specified set.",
         "parameters": {
@@ -383,6 +424,139 @@ def handle_log_set(session: Session, user_id: int, db: dict, args: dict, **kwarg
     return {"type": "set_logged", "data": logged_data}
 
 
+def _ensure_active_exercise(
+    session: Session,
+    user_id: int,
+    db: dict,
+    name: str,
+    category: str | None = None,
+    equipment: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    supplied_name = (name or "").strip()
+    if not supplied_name:
+        raise ValueError("An exercise name is required.")
+
+    match, candidates = resolve_exercise(db.get("exercises", []), supplied_name)
+    if match:
+        return match
+    if candidates:
+        names = ", ".join(item.get("name", "") for item in candidates[:5])
+        raise ValueError(f'Exercise "{supplied_name}" is ambiguous. Possible matches: {names}')
+
+    canonical_name = ALIASES.get(normalize_exercise_name(supplied_name), supplied_name)
+    normalized_category = category or (
+        "Plyometrics" if any(word in normalize_exercise_name(canonical_name) for word in ("jump", "sprung"))
+        else "Other"
+    )
+    normalized_equipment = equipment or ("Bodyweight" if normalized_category == "Plyometrics" else "Other")
+    new_exercise = {
+        "id": _now_id("ex_ai"),
+        "name": canonical_name,
+        "category": normalized_category,
+        "equipment": normalized_equipment,
+        "instructions": notes or "Added from an active workout edit.",
+        "isCustom": True,
+    }
+    crud.save_user_exercise(session, user_id, new_exercise)
+    db.setdefault("exercises", []).append(new_exercise)
+    return new_exercise
+
+
+def _build_active_sets(raw_sets: list[dict] | None, fallback: list[dict] | None = None) -> list[dict]:
+    source = raw_sets if raw_sets is not None else fallback
+    if not source:
+        source = [{"weight": 0, "reps": 8, "setType": "working"}] * 3
+
+    timestamp = int(time.time() * 1000)
+    built = []
+    for index, item in enumerate(source, start=1):
+        rir = item.get("rir")
+        built.append({
+            "id": f"s_{timestamp}_{index}",
+            "setNumber": index,
+            "type": item.get("setType", item.get("type", "working")),
+            "weight": float(item.get("weight", 0) or 0),
+            "reps": int(item.get("reps", 0) or 0),
+            "rpe": round(10.0 - float(rir), 1) if rir is not None else item.get("rpe"),
+            "completed": bool(item.get("completed", False)),
+            "notes": item.get("notes"),
+        })
+    return built
+
+
+def handle_modify_active_workout(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
+    active_workout_state = kwargs.get("active_workout_state")
+    if not active_workout_state or not isinstance(active_workout_state.get("exercises"), list):
+        raise ValueError("No active workout. Start a workout before changing its exercises.")
+
+    operation = (args.get("operation") or "").strip().lower()
+    current_name = (args.get("current_exercise") or "").strip()
+    new_name = (args.get("new_exercise") or "").strip()
+    active_exercises = active_workout_state["exercises"]
+
+    target = None
+    if current_name:
+        normalized_current = normalize_exercise_name(current_name)
+        current_match, _ = resolve_exercise(db.get("exercises", []), current_name)
+        current_id = current_match.get("id") if current_match else None
+        target = next((item for item in active_exercises
+                       if item.get("exerciseId") == current_name
+                       or (current_id and item.get("exerciseId") == current_id)
+                       or normalize_exercise_name(item.get("exerciseName", "")) == normalized_current), None)
+        if target is None:
+            raise ValueError(f'Exercise "{current_name}" is not in the active workout.')
+
+    if operation == "remove_exercise":
+        if target is None:
+            raise ValueError("current_exercise is required to remove an exercise.")
+        active_exercises.remove(target)
+        return {"type": "active_workout_updated", "data": {
+            "operation": operation,
+            "exerciseName": target.get("exerciseName"),
+        }}
+
+    if operation not in {"add_exercise", "replace_exercise"}:
+        raise ValueError("operation must be add_exercise, replace_exercise, or remove_exercise.")
+    if not new_name:
+        raise ValueError("new_exercise is required for this operation.")
+    if operation == "replace_exercise" and target is None:
+        raise ValueError("current_exercise is required to replace an exercise.")
+
+    canonical = _ensure_active_exercise(
+        session, user_id, db, new_name,
+        category=args.get("category"),
+        equipment=args.get("equipment"),
+        notes=args.get("notes"),
+    )
+    if operation == "add_exercise" and any(item.get("exerciseId") == canonical["id"] for item in active_exercises):
+        raise ValueError(f'Exercise "{canonical["name"]}" is already in the active workout.')
+
+    if operation == "replace_exercise":
+        target["exerciseId"] = canonical["id"]
+        target["exerciseName"] = canonical["name"]
+        target["category"] = canonical.get("category", "Other")
+        target["notes"] = args.get("notes") or target.get("notes")
+    else:
+        active_exercises.append({
+            "id": _now_id("we"),
+            "exerciseId": canonical["id"],
+            "exerciseName": canonical["name"],
+            "category": canonical.get("category", "Other"),
+            "sets": _build_active_sets(args.get("sets")),
+            "notes": args.get("notes"),
+        })
+
+    if args.get("sets") is not None and target is not None:
+        target["sets"] = _build_active_sets(args.get("sets"))
+
+    return {"type": "active_workout_updated", "data": {
+        "operation": operation,
+        "exerciseName": canonical["name"],
+        "replacedExercise": current_name or None,
+    }}
+
+
 def handle_correct_log(session: Session, user_id: int, db: dict, args: dict, **kwargs) -> dict:
     active_workout_state = kwargs.get("active_workout_state")
     ex_name = (args.get("exercise_name") or "").strip()
@@ -625,6 +799,7 @@ def handle_delete_workout(session: Session, user_id: int, db: dict, args: dict, 
 HANDLERS = {
     "start_workout_session": handle_start_workout_session,
     "log_set": handle_log_set,
+    "modify_active_workout": handle_modify_active_workout,
     "correct_log": handle_correct_log,
     "get_exercise_history": handle_get_exercise_history,
     "get_session_summary": handle_get_session_summary,

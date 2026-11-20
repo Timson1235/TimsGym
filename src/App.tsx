@@ -225,6 +225,7 @@ export default function App() {
         onUpdateWorkout={setActiveWorkout}
         onFinishWorkout={handleFinishWorkout}
         onCancelWorkout={handleCancelWorkout}
+        onSaveExercise={handleSaveExercise}
         onStartRestTimer={(secs) => setRestTimerSeconds(secs)}
         onNewPR={(exerciseName, weight, reps) => setActivePRCelebration({ exerciseName, weight, reps })}
       />

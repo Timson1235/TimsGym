@@ -18,6 +18,7 @@ interface ActiveWorkoutProps {
   onUpdateWorkout: (updated: WorkoutSession) => void;
   onFinishWorkout: (completed: WorkoutSession) => void;
   onCancelWorkout: () => void;
+  onSaveExercise: (exercise: Exercise) => Promise<void>;
   onStartRestTimer: (seconds: number) => void;
   onNewPR: (exerciseName: string, weight: number, reps: number) => void;
 }
@@ -28,6 +29,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
   onUpdateWorkout,
   onFinishWorkout,
   onCancelWorkout,
+  onSaveExercise,
   onStartRestTimer,
   onNewPR,
 }) => {
@@ -246,13 +248,29 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
     onFinishWorkout(completedSession);
   };
 
-  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Plyometrics'];
+  const categories = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Plyometrics', 'Other'];
 
   const filteredExercises = exercises.filter((ex) => {
     const matchesCat = selectedCategory === 'All' || ex.category === selectedCategory;
     const matchesQuery = ex.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCat && matchesQuery;
   });
+
+  const handleAddSearchedExercise = async () => {
+    const name = searchQuery.trim();
+    if (!name) return;
+    const newExercise: Exercise = {
+      id: `ex_custom_${Date.now()}`,
+      name,
+      category: selectedCategory === 'All' ? 'Other' : selectedCategory as Exercise['category'],
+      equipment: 'Other',
+      instructions: 'Added from the active workout exercise picker.',
+      isCustom: true,
+    };
+    await onSaveExercise(newExercise);
+    handleAddExerciseToWorkout(newExercise);
+    setSearchQuery('');
+  };
 
   return (
     <div className="space-y-6 font-sans">
@@ -537,8 +555,21 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
             {/* Exercise List */}
             <div className="p-4 overflow-y-auto space-y-2 flex-1">
               {filteredExercises.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 text-xs font-bold tracking-normal">
-                  No exercises found.
+                <div className="space-y-3 py-8 text-center">
+                  <p className="text-xs font-bold tracking-normal text-slate-500">
+                    {searchQuery.trim()
+                      ? `No exercise found for “${searchQuery}”.`
+                      : 'No exercises in this category yet.'}
+                  </p>
+                  {searchQuery.trim() && (
+                    <button
+                      type="button"
+                      onClick={handleAddSearchedExercise}
+                      className="app-primary inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold"
+                    >
+                      <Plus className="h-4 w-4" /> Add “{searchQuery.trim()}”
+                    </button>
+                  )}
                 </div>
               ) : (
                 filteredExercises.map((ex) => (
