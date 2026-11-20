@@ -20,7 +20,7 @@ interface ActiveWorkoutProps {
   onUpdateWorkout: (updated: WorkoutSession) => void;
   onFinishWorkout: (completed: WorkoutSession) => void;
   onCancelWorkout: () => void;
-  onSaveExercise: (exercise: Exercise) => Promise<void>;
+  onSaveExercise?: (exercise: Exercise) => Promise<void>;
   onStartRestTimer: (seconds: number) => void;
   onNewPR: (exerciseName: string, weight: number, reps: number) => void;
 }
@@ -262,6 +262,7 @@ export const ActiveWorkout: React.FC<ActiveWorkoutProps> = ({
       instructions: 'Added from the active workout exercise picker.',
       isCustom: true,
     };
+    if (!onSaveExercise) return;
     await onSaveExercise(newExercise);
     handleAddExerciseToWorkout(newExercise);
     setSearchQuery('');
