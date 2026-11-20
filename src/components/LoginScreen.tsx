@@ -61,7 +61,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGuestContinue }) => 
             <div>
               <h2 className="text-xs font-bold text-slate-800">Eigener Cloud SQL Speicher</h2>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Jeder Nutzer erhält automatisch eine eigene, private Datenbank für Workouts, PRs und Notizen.
+                Private Beta: Zugang aktuell nur für den freigeschalteten Inhaber. Trainingsdaten bleiben privat.
               </p>
             </div>
           </div>

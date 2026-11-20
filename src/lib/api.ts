@@ -1,5 +1,7 @@
-import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile } from '../types';
+import { AIChatMessage, DatabaseState, WorkoutSession, Exercise, UserProfile, ProgressionConfig, ProgressionRecommendation } from '../types';
 import { auth } from './firebase';
+import { readChatStream, type ChatStreamEvent } from './chatStream';
+import { cacheChatHistory, removeCachedChat, readChatCache } from './chatCache';
 import { createGuestDatabase } from '../db/guest';
 
 const guestCacheKey = 'gym_db_cache:guest';
@@ -176,16 +178,19 @@ export async function resetDatabaseApi(): Promise<DatabaseState> {
   }
 }
 
-export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string) {
+export async function sendAIChatMessage(message: string, activeWorkoutState?: any, threadId?: string, onEvent?: (event: ChatStreamEvent) => void) {
   const requestStarted = performance.now();
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, activeWorkoutState, threadId }),
+      body: JSON.stringify({ message, activeWorkoutState, threadId, stream: Boolean(onEvent) }),
     });
-    const payload = await res.json().catch(() => ({}));
+    if (onEvent && !res.ok) throw new Error(`Coach request failed (HTTP ${res.status})`);
+    const payload = res.headers.get('Content-Type')?.includes('text/event-stream') && onEvent
+      ? await readChatStream(res, onEvent)
+      : await res.json().catch(() => ({}));
     if (!res.ok) {
       console.error('AI Chat request failed:', res.status, payload.error);
       return {
@@ -209,6 +214,7 @@ export async function sendAIChatMessage(message: string, activeWorkoutState?: an
     return payload;
   } catch (error: any) {
     console.error('AI Chat Error:', error);
+    if (onEvent) throw error;
     return { reply: "Sorry, I couldn't reach the AI Coach right now. Please verify server connection." };
   }
 }
@@ -230,10 +236,16 @@ export async function fetchAIChatHistory(threadId?: string): Promise<AIChatMessa
 }
 
 export async function clearAIChatHistory(threadId?: string): Promise<void> {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const query = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
   const res = await fetch(`/api/ai/history${query}`, { method: 'DELETE', headers });
   if (!res.ok) throw new Error('Failed to clear AI chat history');
+  if (threadId) cacheChatHistory(owner, threadId, []);
+  else {
+    // Legacy callers omit the default thread ID: invalidate the account snapshot.
+    for (const id of Object.keys(readChatCache(owner).histories)) cacheChatHistory(owner, id, []);
+  }
 }
 
 export async function fetchAIChatSessions() {
@@ -256,12 +268,14 @@ export async function createAIChatSession(title = 'New chat') {
 }
 
 export async function deleteAIChatSession(threadId: string) {
+  const owner = auth.currentUser?.uid || 'guest';
   const headers = await getAuthHeaders();
   const res = await fetch(`/api/ai/sessions/${encodeURIComponent(threadId)}`, {
     method: 'DELETE',
     headers,
   });
   if (!res.ok) throw new Error('Failed to delete AI chat session');
+  removeCachedChat(owner, threadId);
 }
 
 export async function fetchAIUsageSummary() {
@@ -271,13 +285,13 @@ export async function fetchAIUsageSummary() {
   return await res.json();
 }
 
-export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8) {
+export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 8, targetRpe = 8, exerciseId?: string, progression?: ProgressionConfig): Promise<ProgressionRecommendation | null> {
   try {
     const headers = await getAuthHeaders();
     const res = await fetch('/api/ai/suggest-weight', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ exerciseName, targetReps, targetRpe }),
+      body: JSON.stringify({ exerciseName, targetReps, targetRpe, exerciseId, progression }),
     });
     if (!res.ok) throw new Error('AI Weight Suggestion failed');
     return await res.json();
@@ -285,4 +299,27 @@ export async function fetchAISuggestedWeight(exerciseName: string, targetReps = 
     console.error('AI Weight Suggestion Error:', error);
     return null;
   }
+}
+
+export async function fetchWorkoutReview(workoutId: string): Promise<{ recommendations: ProgressionRecommendation[] }> {
+  if (!auth.currentUser) throw new Error('Bitte anmelden, um die gespeicherte Trainingshistorie auszuwerten.');
+  const res = await fetch(`/api/ai/workout-review/${encodeURIComponent(workoutId)}`, { headers: await getAuthHeaders() });
+  if (!res.ok) throw new Error('Trainingsauswertung konnte nicht geladen werden.');
+  return res.json();
+}
+
+export async function fetchExecutionTrace(path = '') {
+  const response = await fetch(`/api/ai/traces${path}`, { headers: await getAuthHeaders(), cache: 'no-store' });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Please sign in to inspect your traces.' : 'Could not load execution traces.');
+  return response.json();
+}
+
+export async function fetchAppAccess(): Promise<{canUseApp: boolean; canInspectTraces: boolean}> {
+  const response = await fetch('/api/access', {headers: await getAuthHeaders(), cache: 'no-store'});
+  if (!response.ok) {
+    throw new Error(response.status === 403
+      ? 'This app is currently private. This account does not have access.'
+      : 'Could not verify access. Please retry or sign in again.');
+  }
+  return response.json();
 }

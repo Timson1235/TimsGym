@@ -12,3 +12,6 @@ certifi>=2024.7.4         # CA bundle for direct Anthropic HTTPS requests
 
 # Phase 2: AI agent
 google-genai>=2.24.0      # Gemini 3.8 + thinking levels + function calling
+
+# Provider-neutral tool argument validation
+jsonschema>=4.23,<5

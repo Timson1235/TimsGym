@@ -83,6 +83,38 @@ class ChatSession(SQLModel, table=True):
         default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
 
 
+class ConversationSummary(SQLModel, table=True):
+    """Existing summaries table; the unused nullable embedding column is omitted."""
+    __tablename__ = "summaries"
+    id: str = Field(primary_key=True)
+    user_id: int = Field(index=True)
+    thread_id: str
+    description: str
+    summary_text: str
+    full_content: str
+    created_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
+
+
+class SummaryJob(SQLModel, table=True):
+    """One durable, coalesced summary checkpoint and lease per account/chat."""
+    __tablename__ = "summary_jobs"
+    id: str = Field(primary_key=True)
+    user_id: int = Field(index=True)
+    thread_id: str
+    requested_through_id: int = 0
+    completed_through_id: int = 0
+    summary_id: Optional[str] = None
+    status: str = Field(default="pending", index=True)
+    attempts: int = 0
+    available_at: float = 0
+    lease_until: float = 0
+    lease_token: Optional[str] = None
+    last_error_type: Optional[str] = None
+    last_usage: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    completed_at: Optional[float] = None
+
+
 class ToolLog(SQLModel, table=True):
     """Audit log of every tool call the agent makes."""
     __tablename__ = "tool_logs"
@@ -127,3 +159,41 @@ class AIRequestMetric(SQLModel, table=True):
     error_type: Optional[str] = None
     created_at: Optional[datetime] = Field(
         default=None, sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()))
+
+
+class AgentTrace(SQLModel, table=True):
+    __tablename__ = 'agent_traces'
+    id: str = Field(primary_key=True)
+    user_id: int = Field(index=True)
+    thread_id: str = Field(index=True)
+    parent_trace_id: Optional[str] = Field(default=None, index=True)
+    kind: str = 'chat'
+    name: str = 'Coach request'
+    version: int = 1
+    status: str = Field(default='running', index=True)
+    started_at: float
+    ended_at: Optional[float] = None
+    error_type: Optional[str] = None
+
+
+class AgentSpan(SQLModel, table=True):
+    __tablename__ = 'agent_spans'
+    id: str = Field(primary_key=True)
+    trace_id: str = Field(index=True)
+    parent_span_id: Optional[str] = None
+    sequence: int
+    kind: str
+    name: str
+    status: str = 'running'
+    started_at: float
+    ended_at: Optional[float] = None
+    input_payload_id: Optional[str] = None
+    output_payload_id: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+class AgentTracePayload(SQLModel, table=True):
+    __tablename__ = 'agent_trace_payloads'
+    id: str = Field(primary_key=True)
+    trace_id: str = Field(index=True)
+    data: Any = Field(sa_column=Column(JSON, nullable=False))
