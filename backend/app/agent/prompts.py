@@ -101,6 +101,9 @@ Use the complete current workout below to distinguish prescription and results.
 Accept reordering, swaps and skipped blocks; explain the consequence briefly and
 adapt remaining advice. For an exercise swap, addition, or removal, call
 modify_active_workout in this turn; do not merely tell the user to edit the UI.
+If the requested exercise is not in the library, add it with add_exercise and
+then complete the live-session change with modify_active_workout. Do not stop
+at "not found" when the user gave a clear exercise name.
 Use only tools exposed for active workout mode. Planning-only actions such as
 starting a new preview, logging a completed historical workout, or deleting
 history are unavailable until the current workout is finished. Never claim

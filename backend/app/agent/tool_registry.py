@@ -82,11 +82,12 @@ PLANNING_TOOL_NAMES = {
     'get_exercise_history', 'get_session_summary', 'get_workout_details',
     'resolve_exercise', 'open_flag', 'resolve_flag', 'suggest_weight',
     'log_workout', 'add_exercise', 'update_profile', 'delete_workout',
+    'batch_retrieve',
 }
 
 ACTIVE_TOOL_NAMES = {
     'save_personal_memory', 'remove_personal_memory', 'log_set',
-    'modify_active_workout', 'correct_log', 'get_exercise_history',
+    'modify_active_workout', 'add_exercise', 'correct_log', 'get_exercise_history',
     'resolve_exercise', 'open_flag', 'resolve_flag', 'suggest_weight',
 }
 
@@ -105,7 +106,7 @@ class ToolSession:
         self.allowed = ACTIVE_TOOL_NAMES if active_workout else PLANNING_TOOL_NAMES
         self.active = {'discover_tools'}
         if active_workout:
-            self.active.update(('log_set', 'modify_active_workout', 'correct_log', 'resolve_exercise'))
+            self.active.update(('log_set', 'modify_active_workout', 'add_exercise', 'correct_log', 'resolve_exercise'))
         self.initial = self.names()
         self.advertised = frozenset(self.active)
         self.discovery_results = []

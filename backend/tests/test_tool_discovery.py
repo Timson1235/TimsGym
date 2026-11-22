@@ -36,13 +36,13 @@ def workout(ident, title, ex, date):
 class RegistryTests(unittest.TestCase):
     def test_core_and_discovery_are_request_local_and_freeze_each_round(self):
         session = ToolSession(True)
-        self.assertEqual(session.names(), ['correct_log', 'discover_tools', 'log_set', 'modify_active_workout', 'resolve_exercise'])
+        self.assertEqual(session.names(), ['add_exercise', 'correct_log', 'discover_tools', 'log_set', 'modify_active_workout', 'resolve_exercise'])
         session.declarations()
-        session.discover(['get_session_summary', 'get_exercise_history'])
+        session.discover(['get_exercise_history', 'suggest_weight'])
         with self.assertRaisesRegex(ValueError, 'inactive'):
             session.validate('get_session_summary', {})
         session.declarations()
-        self.assertTrue(session.validate('get_session_summary', {}).read_only)
+        self.assertTrue(session.validate('get_exercise_history', {'exercise_name': 'Squat'}).read_only)
         self.assertEqual(ToolSession(False).names(), ['discover_tools'])
         with self.assertRaisesRegex(ValueError, 'unavailable'):
             session.discover(['start_workout_session'])
